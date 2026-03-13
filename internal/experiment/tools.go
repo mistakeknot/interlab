@@ -35,12 +35,14 @@ var initExperimentTool = mcp.NewTool("init_experiment",
 
 var runExperimentTool = mcp.NewTool("run_experiment",
 	mcp.WithDescription("Execute the benchmark command, capture output and timing. Checks circuit breaker before running."),
+	mcp.WithString("working_directory", mcp.Description("Directory containing interlab.jsonl (default: cwd)")),
 )
 
 var logExperimentTool = mcp.NewTool("log_experiment",
 	mcp.WithDescription("Record experiment result. 'keep' commits changes, 'discard'/'crash' reverts."),
 	mcp.WithString("decision", mcp.Required(), mcp.Description("'keep', 'discard', or 'crash'")),
 	mcp.WithString("description", mcp.Required(), mcp.Description("What was changed and why")),
+	mcp.WithString("working_directory", mcp.Description("Directory containing interlab.jsonl (default: cwd)")),
 )
 
 func handleInitExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -130,10 +132,14 @@ func handleInitExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 }
 
 func handleRunExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	// Get working directory
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil, fmt.Errorf("get working directory: %w", err)
+	// Resolve campaign directory: explicit param > cwd
+	cwd := req.GetString("working_directory", "")
+	if cwd == "" {
+		var err error
+		cwd, err = os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("get working directory: %w", err)
+		}
 	}
 
 	jsonlPath := filepath.Join(cwd, "interlab.jsonl")
@@ -290,10 +296,14 @@ func readRunDetails(dir string) (*RunDetails, error) {
 }
 
 func handleLogExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	// Get working directory
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil, fmt.Errorf("get working directory: %w", err)
+	// Resolve campaign directory: explicit param > cwd
+	cwd := req.GetString("working_directory", "")
+	if cwd == "" {
+		var err error
+		cwd, err = os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("get working directory: %w", err)
+		}
 	}
 
 	jsonlPath := filepath.Join(cwd, "interlab.jsonl")
