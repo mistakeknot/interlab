@@ -2,10 +2,15 @@ package experiment
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -125,7 +130,163 @@ func handleInitExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 }
 
 func handleRunExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	return mcp.NewToolResultText("run_experiment: not yet implemented"), nil
+	// Get working directory
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("get working directory: %w", err)
+	}
+
+	jsonlPath := filepath.Join(cwd, "interlab.jsonl")
+
+	// Reconstruct state
+	state, err := ReconstructState(jsonlPath)
+	if err != nil {
+		return nil, fmt.Errorf("reconstruct state: %w", err)
+	}
+
+	// No active campaign?
+	if state.SegmentID == 0 {
+		return mcp.NewToolResultText("no active campaign — call init_experiment first"), nil
+	}
+
+	// Check circuit breaker
+	if cbErr := state.CheckCircuitBreaker(); cbErr != nil {
+		return mcp.NewToolResultText(cbErr.Error()), nil
+	}
+
+	// Determine working directory for benchmark
+	workDir := state.Config.WorkingDirectory
+	if workDir == "" {
+		workDir = cwd
+	}
+
+	// Execute benchmark
+	start := time.Now()
+	cmd := exec.CommandContext(ctx, "bash", "-c", state.Config.BenchmarkCommand)
+	cmd.Dir = workDir
+	output, cmdErr := cmd.CombinedOutput()
+	durationMs := time.Since(start).Milliseconds()
+
+	exitCode := 0
+	if cmdErr != nil {
+		if exitErr, ok := cmdErr.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			return nil, fmt.Errorf("execute benchmark: %w", cmdErr)
+		}
+	}
+
+	outputStr := string(output)
+
+	// Parse METRIC lines
+	metrics := parseMetrics(outputStr)
+
+	// Build response
+	expNum := state.RunCount + 1
+	var b strings.Builder
+	fmt.Fprintf(&b, "## Run #%d (segment %d)\n", expNum, state.SegmentID)
+	fmt.Fprintf(&b, "- duration: %dms\n", durationMs)
+	fmt.Fprintf(&b, "- exit code: %d\n", exitCode)
+
+	// Primary metric
+	primaryName := state.Config.MetricName
+	if val, ok := metrics[primaryName]; ok {
+		fmt.Fprintf(&b, "- %s: %.4g %s\n", primaryName, val, state.Config.MetricUnit)
+		if state.HasBaseline {
+			delta := val - state.BestMetric
+			sign := "+"
+			if delta < 0 {
+				sign = ""
+			}
+			fmt.Fprintf(&b, "- delta vs best: %s%.4g %s\n", sign, delta, state.Config.MetricUnit)
+		}
+	}
+
+	// All metrics
+	if len(metrics) > 0 {
+		fmt.Fprintf(&b, "\n### Metrics\n")
+		for name, val := range metrics {
+			fmt.Fprintf(&b, "- %s = %.4g\n", name, val)
+		}
+	}
+
+	// Truncated output tail
+	tail := truncateTail(outputStr, 20)
+	if tail != "" {
+		fmt.Fprintf(&b, "\n### Output (last 20 lines)\n```\n%s\n```\n", tail)
+	}
+
+	// Save run details for log_experiment
+	details := RunDetails{
+		ExitCode:   exitCode,
+		DurationMs: durationMs,
+		Metrics:    metrics,
+		Output:     outputStr,
+	}
+	if wErr := writeRunDetails(cwd, details); wErr != nil {
+		fmt.Fprintf(&b, "\n(warning: failed to save run details: %v)\n", wErr)
+	}
+
+	return mcp.NewToolResultText(b.String()), nil
+}
+
+// RunDetails holds data from a benchmark run for log_experiment to consume.
+type RunDetails struct {
+	ExitCode   int                `json:"exit_code"`
+	DurationMs int64              `json:"duration_ms"`
+	Metrics    map[string]float64 `json:"metrics"`
+	Output     string             `json:"output"`
+}
+
+var metricPattern = regexp.MustCompile(`^METRIC\s+(\S+)=(\S+)$`)
+
+// parseMetrics scans output lines for METRIC name=value patterns.
+func parseMetrics(output string) map[string]float64 {
+	metrics := make(map[string]float64)
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		m := metricPattern.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		val, err := strconv.ParseFloat(m[2], 64)
+		if err != nil {
+			continue
+		}
+		metrics[m[1]] = val
+	}
+	return metrics
+}
+
+// truncateTail returns the last n lines of s.
+func truncateTail(s string, n int) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	if len(lines) <= n {
+		return strings.Join(lines, "\n")
+	}
+	return strings.Join(lines[len(lines)-n:], "\n")
+}
+
+const runDetailsFile = ".interlab-run.json"
+
+func writeRunDetails(dir string, d RunDetails) error {
+	data, err := json.Marshal(d)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, runDetailsFile), data, 0644)
+}
+
+func readRunDetails(dir string) (*RunDetails, error) {
+	data, err := os.ReadFile(filepath.Join(dir, runDetailsFile))
+	if err != nil {
+		return nil, err
+	}
+	var d RunDetails
+	if err := json.Unmarshal(data, &d); err != nil {
+		return nil, err
+	}
+	return &d, nil
 }
 
 func handleLogExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
