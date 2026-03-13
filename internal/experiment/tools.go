@@ -411,8 +411,8 @@ func handleLogExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 	// Cleanup run details
 	os.Remove(filepath.Join(cwd, runDetailsFile))
 
-	// TODO: emit event (Task 7)
-	// EmitExperimentEvent(cfg, result)
+	// Emit ic event (best-effort)
+	EmitExperimentEvent(cfg, result)
 
 	// Summary stats
 	updated, _ := ReconstructState(jsonlPath)
