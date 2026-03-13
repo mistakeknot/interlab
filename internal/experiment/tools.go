@@ -2,6 +2,10 @@ package experiment
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -35,7 +39,89 @@ var logExperimentTool = mcp.NewTool("log_experiment",
 )
 
 func handleInitExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	return mcp.NewToolResultText("init_experiment: not yet implemented"), nil
+	// Extract arguments
+	name := req.GetString("name", "")
+	metricName := req.GetString("metric_name", "")
+	metricUnit := req.GetString("metric_unit", "")
+	direction := req.GetString("direction", "")
+	benchCmd := req.GetString("benchmark_command", "")
+	workDir := req.GetString("working_directory", "")
+
+	// Validate required fields
+	var missing []string
+	if name == "" {
+		missing = append(missing, "name")
+	}
+	if metricName == "" {
+		missing = append(missing, "metric_name")
+	}
+	if direction == "" {
+		missing = append(missing, "direction")
+	}
+	if benchCmd == "" {
+		missing = append(missing, "benchmark_command")
+	}
+	if len(missing) > 0 {
+		return mcp.NewToolResultText(fmt.Sprintf("missing required fields: %v", missing)), nil
+	}
+
+	// Validate direction
+	if direction != "lower_is_better" && direction != "higher_is_better" {
+		return mcp.NewToolResultText(fmt.Sprintf("invalid direction %q: must be 'lower_is_better' or 'higher_is_better'", direction)), nil
+	}
+
+	// Default working directory to cwd
+	if workDir == "" {
+		var err error
+		workDir, err = os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("get working directory: %w", err)
+		}
+	}
+
+	// Build config and write header
+	cfg := Config{
+		Name:             name,
+		MetricName:       metricName,
+		MetricUnit:       metricUnit,
+		Direction:        direction,
+		BenchmarkCommand: benchCmd,
+		WorkingDirectory: workDir,
+	}
+
+	jsonlPath := filepath.Join(workDir, "interlab.jsonl")
+	if err := WriteConfigHeader(jsonlPath, cfg); err != nil {
+		return nil, fmt.Errorf("write config header: %w", err)
+	}
+
+	// Best-effort: create experiment branch
+	gitCmd := exec.CommandContext(ctx, "git", "-C", workDir, "checkout", "-b", "interlab/"+name)
+	branchMsg := ""
+	if err := gitCmd.Run(); err != nil {
+		branchMsg = fmt.Sprintf(" (branch creation skipped: %v)", err)
+	} else {
+		branchMsg = fmt.Sprintf(" on branch interlab/%s", name)
+	}
+
+	// Reconstruct state to return summary
+	state, err := ReconstructState(jsonlPath)
+	if err != nil {
+		return nil, fmt.Errorf("reconstruct state: %w", err)
+	}
+
+	summary := fmt.Sprintf("Experiment %q initialized%s\n"+
+		"  metric: %s (%s, %s)\n"+
+		"  command: %s\n"+
+		"  limits: %d experiments, %d crashes, %d no-improvement\n"+
+		"  segment: %d",
+		name, branchMsg,
+		state.Config.MetricName, state.Config.MetricUnit, state.Config.Direction,
+		state.Config.BenchmarkCommand,
+		state.Config.MaxExperiments, state.Config.MaxCrashes, state.Config.MaxNoImprovement,
+		state.SegmentID,
+	)
+
+	return mcp.NewToolResultText(summary), nil
 }
 
 func handleRunExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
