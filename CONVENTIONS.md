@@ -1,0 +1,16 @@
+# interlab Conventions
+
+Canonical documentation paths. Do not introduce compatibility aliases or fallback filenames.
+
+## Documentation Paths
+
+- Roadmap: `docs/roadmap.md`
+- Vision: `docs/interlab-vision.md`
+- PRD: `docs/PRD.md` (or `docs/prds/*.md` for multiple)
+- CUJs: `docs/cujs/*.md` (one per journey)
+
+## Enforcement Rules
+
+- Do not use non-canonical paths for documentation.
+- New docs, commands, and scripts must reference canonical paths only.
+- Existing non-canonical files should be migrated to canonical filenames.

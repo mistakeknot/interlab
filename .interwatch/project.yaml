@@ -1,0 +1,7 @@
+# Project configuration — created by /clavain:project-onboard
+# Scripts read this for project-level settings (ROADMAP_PROJECT, scan dirs, etc.)
+
+project: interlab
+
+roadmap:
+  scan_dirs: []
