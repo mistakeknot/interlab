@@ -290,5 +290,138 @@ func readRunDetails(dir string) (*RunDetails, error) {
 }
 
 func handleLogExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	return mcp.NewToolResultText("log_experiment: not yet implemented"), nil
+	// Get working directory
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("get working directory: %w", err)
+	}
+
+	jsonlPath := filepath.Join(cwd, "interlab.jsonl")
+
+	// Reconstruct state
+	state, err := ReconstructState(jsonlPath)
+	if err != nil {
+		return nil, fmt.Errorf("reconstruct state: %w", err)
+	}
+
+	if state.SegmentID == 0 {
+		return mcp.NewToolResultText("no active campaign — call init_experiment first"), nil
+	}
+
+	// Read run details from previous run_experiment call
+	details, err := readRunDetails(cwd)
+	if err != nil {
+		return mcp.NewToolResultText("no preceding run_experiment call — run_experiment must be called before log_experiment"), nil
+	}
+
+	// Extract arguments
+	decision := req.GetString("decision", "")
+	description := req.GetString("description", "")
+
+	// Validate decision
+	if decision != "keep" && decision != "discard" && decision != "crash" {
+		return mcp.NewToolResultText(fmt.Sprintf("invalid decision %q: must be 'keep', 'discard', or 'crash'", decision)), nil
+	}
+
+	cfg := state.Config
+	workDir := cfg.WorkingDirectory
+	if workDir == "" {
+		workDir = cwd
+	}
+
+	// Get primary metric value
+	primaryValue := details.Metrics[cfg.MetricName]
+
+	// Build secondary metrics (everything except primary)
+	var secondary map[string]float64
+	for k, v := range details.Metrics {
+		if k != cfg.MetricName {
+			if secondary == nil {
+				secondary = make(map[string]float64)
+			}
+			secondary[k] = v
+		}
+	}
+
+	// Build result
+	result := Result{
+		Decision:         decision,
+		Description:      description,
+		MetricValue:      primaryValue,
+		DurationMs:       details.DurationMs,
+		ExitCode:         details.ExitCode,
+		SecondaryMetrics: secondary,
+	}
+
+	var b strings.Builder
+
+	switch decision {
+	case "keep":
+		// Stage and commit files in scope
+		if len(cfg.FilesInScope) > 0 {
+			// Path-scoped git add — NEVER git add -A
+			for _, f := range cfg.FilesInScope {
+				addCmd := exec.CommandContext(ctx, "git", "-C", workDir, "add", f)
+				addCmd.Run() // best-effort
+			}
+
+			// Build commit message with trailers
+			commitMsg := fmt.Sprintf("interlab: %s\n\nMetric-Name: %s\nMetric-Value: %.4g",
+				description, cfg.MetricName, primaryValue)
+			if cfg.BeadID != "" {
+				commitMsg += fmt.Sprintf("\nBead-ID: %s", cfg.BeadID)
+			}
+
+			commitCmd := exec.CommandContext(ctx, "git", "-C", workDir, "commit", "-m", commitMsg)
+			commitCmd.Run() // best-effort
+
+			// Capture commit hash
+			hashCmd := exec.CommandContext(ctx, "git", "-C", workDir, "rev-parse", "HEAD")
+			hashOut, hashErr := hashCmd.Output()
+			if hashErr == nil {
+				result.CommitHash = strings.TrimSpace(string(hashOut))
+			}
+		}
+
+		fmt.Fprintf(&b, "## Decision: keep — %s\n", description)
+		fmt.Fprintf(&b, "- %s: %.4g %s\n", cfg.MetricName, primaryValue, cfg.MetricUnit)
+		if result.CommitHash != "" {
+			fmt.Fprintf(&b, "- commit: %s\n", result.CommitHash[:min(12, len(result.CommitHash))])
+		}
+
+	case "discard", "crash":
+		// Revert files in scope
+		if len(cfg.FilesInScope) > 0 {
+			for _, f := range cfg.FilesInScope {
+				checkoutCmd := exec.CommandContext(ctx, "git", "-C", workDir, "checkout", "--", f)
+				checkoutCmd.Run() // best-effort
+			}
+		}
+
+		fmt.Fprintf(&b, "## Decision: %s — %s\n", decision, description)
+		fmt.Fprintf(&b, "- %s: %.4g %s\n", cfg.MetricName, primaryValue, cfg.MetricUnit)
+		fmt.Fprintf(&b, "- changes reverted\n")
+	}
+
+	// Write result to JSONL
+	if wErr := WriteResult(jsonlPath, result); wErr != nil {
+		return nil, fmt.Errorf("write result: %w", wErr)
+	}
+
+	// Cleanup run details
+	os.Remove(filepath.Join(cwd, runDetailsFile))
+
+	// TODO: emit event (Task 7)
+	// EmitExperimentEvent(cfg, result)
+
+	// Summary stats
+	updated, _ := ReconstructState(jsonlPath)
+	fmt.Fprintf(&b, "\n### Campaign: %s (segment %d)\n", cfg.Name, updated.SegmentID)
+	fmt.Fprintf(&b, "- runs: %d | kept: %d | discarded: %d | crashes: %d\n",
+		updated.RunCount, updated.KeptCount, updated.DiscardedCount, updated.CrashCount)
+	if updated.HasBaseline {
+		fmt.Fprintf(&b, "- best %s: %.4g %s\n", cfg.MetricName, updated.BestMetric, cfg.MetricUnit)
+	}
+
+	return mcp.NewToolResultText(b.String()), nil
 }
