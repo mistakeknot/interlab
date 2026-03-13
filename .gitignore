@@ -1,0 +1,9 @@
+bin/interlab-mcp
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.claude/
+.beads/
+*.log
+.DS_Store
