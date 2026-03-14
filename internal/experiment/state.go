@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -135,12 +136,8 @@ func ReconstructState(path string) (*State, error) {
 			case "keep":
 				s.KeptCount++
 				s.ConsecutiveCrashes = 0
-				// Need metric_value — minimal decode
-				var mv struct {
-					MetricValue float64 `json:"metric_value"`
-				}
-				json.Unmarshal(line, &mv)
-				metricValue = mv.MetricValue
+				// Extract metric_value via byte scan — avoids json.Unmarshal.
+				metricValue = extractMetricValue(line)
 				if !s.HasBaseline {
 					s.BaselineMetric = metricValue
 					s.BestMetric = metricValue
@@ -179,6 +176,23 @@ func ReconstructState(path string) (*State, error) {
 	}
 
 	return s, scanner.Err()
+}
+
+// extractMetricValue extracts "metric_value":N from JSON bytes without parsing.
+func extractMetricValue(line []byte) float64 {
+	key := []byte(`"metric_value":`)
+	idx := bytes.Index(line, key)
+	if idx < 0 {
+		return 0
+	}
+	start := idx + len(key)
+	// Find end of number: next comma, closing brace, or end of line
+	end := start
+	for end < len(line) && line[end] != ',' && line[end] != '}' {
+		end++
+	}
+	val, _ := strconv.ParseFloat(string(line[start:end]), 64)
+	return val
 }
 
 func isBetter(new, best float64, direction string) bool {
