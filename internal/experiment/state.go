@@ -119,25 +119,34 @@ func ReconstructState(path string) (*State, error) {
 			s.HasBaseline = false
 			s.SecondaryMetricKeys = nil
 		} else {
-			// Lightweight result struct — only decode fields needed for state.
-			var res struct {
-				Decision         string             `json:"decision"`
-				MetricValue      float64            `json:"metric_value"`
-				SecondaryMetrics map[string]float64 `json:"secondary_metrics"`
-			}
-			json.Unmarshal(line, &res)
 			s.RunCount++
+			// Extract decision via byte scan to avoid JSON parse for discard/crash.
+			var decision string
+			var metricValue float64
+			if bytes.Contains(line, []byte(`"decision":"keep"`)) {
+				decision = "keep"
+			} else if bytes.Contains(line, []byte(`"decision":"discard"`)) {
+				decision = "discard"
+			} else if bytes.Contains(line, []byte(`"decision":"crash"`)) {
+				decision = "crash"
+			}
 
-			switch res.Decision {
+			switch decision {
 			case "keep":
 				s.KeptCount++
 				s.ConsecutiveCrashes = 0
+				// Need metric_value — minimal decode
+				var mv struct {
+					MetricValue float64 `json:"metric_value"`
+				}
+				json.Unmarshal(line, &mv)
+				metricValue = mv.MetricValue
 				if !s.HasBaseline {
-					s.BaselineMetric = res.MetricValue
-					s.BestMetric = res.MetricValue
+					s.BaselineMetric = metricValue
+					s.BestMetric = metricValue
 					s.HasBaseline = true
-				} else if isBetter(res.MetricValue, s.BestMetric, s.Config.Direction) {
-					s.BestMetric = res.MetricValue
+				} else if isBetter(metricValue, s.BestMetric, s.Config.Direction) {
+					s.BestMetric = metricValue
 					s.ConsecutiveNoImprove = 0
 				} else {
 					s.ConsecutiveNoImprove++
@@ -152,12 +161,19 @@ func ReconstructState(path string) (*State, error) {
 				s.ConsecutiveNoImprove++
 			}
 
-			if len(res.SecondaryMetrics) > 0 && s.SecondaryMetricKeys == nil {
-				keys := make([]string, 0, len(res.SecondaryMetrics))
-				for k := range res.SecondaryMetrics {
-					keys = append(keys, k)
+			// Track secondary metric keys (first result only)
+			if s.SecondaryMetricKeys == nil && bytes.Contains(line, []byte(`"secondary_metrics"`)) {
+				var sm struct {
+					SecondaryMetrics map[string]float64 `json:"secondary_metrics"`
 				}
-				s.SecondaryMetricKeys = keys
+				json.Unmarshal(line, &sm)
+				if len(sm.SecondaryMetrics) > 0 {
+					keys := make([]string, 0, len(sm.SecondaryMetrics))
+					for k := range sm.SecondaryMetrics {
+						keys = append(keys, k)
+					}
+					s.SecondaryMetricKeys = keys
+				}
 			}
 		}
 	}
