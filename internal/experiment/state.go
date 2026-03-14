@@ -1,10 +1,11 @@
 package experiment
 
 import (
-	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -71,38 +72,42 @@ func defaults(cfg *Config) {
 func ReconstructState(path string) (*State, error) {
 	s := &State{}
 
-	f, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return s, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("open jsonl: %w", err)
+		return nil, fmt.Errorf("read jsonl: %w", err)
 	}
-	defer f.Close()
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // 1MB lines
-
-	for scanner.Scan() {
-		line := scanner.Bytes()
+	// Scan newlines in-place — avoids [][]byte allocation from bytes.Split.
+	for len(data) > 0 {
+		var line []byte
+		if idx := bytes.IndexByte(data, '\n'); idx >= 0 {
+			line = data[:idx]
+			data = data[idx+1:]
+		} else {
+			line = data
+			data = nil
+		}
 		if len(line) == 0 {
 			continue
 		}
 
-		var raw map[string]interface{}
-		if err := json.Unmarshal(line, &raw); err != nil {
-			continue // skip malformed lines
+		// Byte-level type detection — avoids JSON parse for type discrimination.
+		// We control the JSONL output so "type" is always present near the start.
+		isConfig := bytes.Contains(line, []byte(`"type":"config"`))
+		isResult := bytes.Contains(line, []byte(`"type":"result"`))
+		if !isConfig && !isResult {
+			continue
 		}
 
-		typ, _ := raw["type"].(string)
-		switch typ {
-		case "config":
+		if isConfig {
 			var cfg Config
 			json.Unmarshal(line, &cfg)
 			defaults(&cfg)
 			s.Config = cfg
 			s.SegmentID++
-			// Reset per-segment counters
 			s.RunCount = 0
 			s.KeptCount = 0
 			s.DiscardedCount = 0
@@ -112,22 +117,31 @@ func ReconstructState(path string) (*State, error) {
 			s.BestMetric = 0
 			s.HasBaseline = false
 			s.SecondaryMetricKeys = nil
-
-		case "result":
-			var res Result
-			json.Unmarshal(line, &res)
+		} else {
 			s.RunCount++
+			// Extract decision via byte scan to avoid JSON parse for discard/crash.
+			var decision string
+			var metricValue float64
+			if bytes.Contains(line, []byte(`"decision":"keep"`)) {
+				decision = "keep"
+			} else if bytes.Contains(line, []byte(`"decision":"discard"`)) {
+				decision = "discard"
+			} else if bytes.Contains(line, []byte(`"decision":"crash"`)) {
+				decision = "crash"
+			}
 
-			switch res.Decision {
+			switch decision {
 			case "keep":
 				s.KeptCount++
 				s.ConsecutiveCrashes = 0
+				// Extract metric_value via byte scan — avoids json.Unmarshal.
+				metricValue = extractMetricValue(line)
 				if !s.HasBaseline {
-					s.BaselineMetric = res.MetricValue
-					s.BestMetric = res.MetricValue
+					s.BaselineMetric = metricValue
+					s.BestMetric = metricValue
 					s.HasBaseline = true
-				} else if isBetter(res.MetricValue, s.BestMetric, s.Config.Direction) {
-					s.BestMetric = res.MetricValue
+				} else if isBetter(metricValue, s.BestMetric, s.Config.Direction) {
+					s.BestMetric = metricValue
 					s.ConsecutiveNoImprove = 0
 				} else {
 					s.ConsecutiveNoImprove++
@@ -142,18 +156,41 @@ func ReconstructState(path string) (*State, error) {
 				s.ConsecutiveNoImprove++
 			}
 
-			// Track secondary metric keys
-			if len(res.SecondaryMetrics) > 0 && s.SecondaryMetricKeys == nil {
-				keys := make([]string, 0, len(res.SecondaryMetrics))
-				for k := range res.SecondaryMetrics {
-					keys = append(keys, k)
+			// Track secondary metric keys (first result only)
+			if s.SecondaryMetricKeys == nil && bytes.Contains(line, []byte(`"secondary_metrics"`)) {
+				var sm struct {
+					SecondaryMetrics map[string]float64 `json:"secondary_metrics"`
 				}
-				s.SecondaryMetricKeys = keys
+				json.Unmarshal(line, &sm)
+				if len(sm.SecondaryMetrics) > 0 {
+					keys := make([]string, 0, len(sm.SecondaryMetrics))
+					for k := range sm.SecondaryMetrics {
+						keys = append(keys, k)
+					}
+					s.SecondaryMetricKeys = keys
+				}
 			}
 		}
 	}
 
-	return s, scanner.Err()
+	return s, nil
+}
+
+// extractMetricValue extracts "metric_value":N from JSON bytes without parsing.
+func extractMetricValue(line []byte) float64 {
+	key := []byte(`"metric_value":`)
+	idx := bytes.Index(line, key)
+	if idx < 0 {
+		return 0
+	}
+	start := idx + len(key)
+	// Find end of number: next comma, closing brace, or end of line
+	end := start
+	for end < len(line) && line[end] != ',' && line[end] != '}' {
+		end++
+	}
+	val, _ := strconv.ParseFloat(string(line[start:end]), 64)
+	return val
 }
 
 func isBetter(new, best float64, direction string) bool {
