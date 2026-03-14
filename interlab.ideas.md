@@ -2,15 +2,20 @@
 
 ## Promising
 
-- [ ] Pre-allocate scanner buffer based on file size — avoid repeated growth
-- [ ] Use json.RawMessage for first-pass type discrimination instead of map[string]interface{}
-- [ ] Avoid double unmarshal (currently: unmarshal to map, then unmarshal to struct) — use type peek
-- [ ] Use bufio.Scanner line-by-line with pre-sized byte slice pool
-- [ ] Replace json.Encoder with direct append+Marshal for WriteResult (avoid encoder overhead)
 - [ ] Cache file descriptor across multiple reads in same process (MCP server is long-lived)
-- [ ] Use json.Decoder instead of Scanner+Unmarshal to skip intermediate byte copy
-- [ ] Compile regex once at package level for parseMetrics (already done — verify no allocation)
-- [ ] Reduce allocations in isBetter/defaults by inlining
+- [ ] Read file into memory in one shot (`os.ReadFile`) then scan bytes — avoids buffered I/O overhead
+- [x] Extract metric_value via byte scan — **-77%** (#8, biggest single win)
+- [ ] Use `bufio.Reader` with larger buffer instead of Scanner for fewer syscalls
+
+## Tried
+
+- [x] Use typeOnly struct for type discrimination — **-31%** (#1)
+- [x] Byte-level type detection with bytes.Contains — **-27%** (#2)
+- [x] Size scanner buffer to file size — **-26%** (#3)
+- [x] Replace json.Encoder with json.Marshal in appendJSONL — no change (#4, discarded)
+- [x] Lightweight result struct (3 fields only) — **-20%** (#5)
+- [x] Pre-allocate byte patterns as package vars — no change (#6, discarded)
+- [x] Byte-scan decisions, skip JSON for discard/crash — **-22%** (#7)
 
 ## Tried
 
