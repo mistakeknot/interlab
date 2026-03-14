@@ -79,8 +79,8 @@ func bdSetState(beadID, key, value string) error {
 		return nil
 	}
 
-	cmd := exec.Command("bd", "set-state", key, beadID)
-	cmd.Stdin = strings.NewReader(value)
+	// bd set-state <beadID> "key=value"
+	cmd := exec.Command("bd", "set-state", beadID, fmt.Sprintf("%s=%s", key, value))
 	cmd.Run() // best-effort: ignore errors
 	return nil
 }
@@ -122,11 +122,17 @@ func bdGetState(beadID, key string) string {
 		return ""
 	}
 
-	out, err := exec.Command("bd", "get-state", key, beadID).Output()
+	// bd state <beadID> <key>
+	out, err := exec.Command("bd", "state", beadID, key).Output()
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	result := strings.TrimSpace(string(out))
+	// bd returns "(no <key> state set)" when no state exists
+	if strings.HasPrefix(result, "(no ") {
+		return ""
+	}
+	return result
 }
 
 // bdShow returns bead metadata. Returns (nil, nil) if bd is not available.
