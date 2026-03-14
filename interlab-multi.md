@@ -22,4 +22,8 @@ Optimize interlab's v0.3 orchestration code (`internal/orchestration/`) across t
 - API contract (tool names, parameters) must not change
 
 ## Progress Log
-(updated as campaigns dispatch, complete, or produce insights)
+
+- **2026-03-14 08:25** — `plan_campaigns` called successfully. Created 2 campaigns, 2 beads (Demarch-9kor, Demarch-jc74), no file conflicts detected. Tool works correctly.
+- **2026-03-14 08:26** — `dispatch_campaigns` failed: "no campaign_ids state found". Root cause: `bdSetState` and `bdGetState` in `beads.go` had wrong CLI syntax for `bd set-state` and `bd state`. Fixed in commit f51bfe7.
+- **2026-03-14 08:30** — Manually set bead state via `bd set-state`. Rebuilt binary. But MCP server still running old code — can't test dispatch/status/synthesize until session restart.
+- **Status:** PAUSED — restart session to load fixed binary, then resume from Phase 3 (dispatch)
