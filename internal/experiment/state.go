@@ -83,19 +83,23 @@ func ReconstructState(path string) (*State, error) {
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // 1MB lines
 
+	// Lightweight struct for type discrimination — avoids allocating map[string]interface{}.
+	type typeOnly struct {
+		Type string `json:"type"`
+	}
+
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
 		}
 
-		var raw map[string]interface{}
-		if err := json.Unmarshal(line, &raw); err != nil {
+		var peek typeOnly
+		if err := json.Unmarshal(line, &peek); err != nil {
 			continue // skip malformed lines
 		}
 
-		typ, _ := raw["type"].(string)
-		switch typ {
+		switch peek.Type {
 		case "config":
 			var cfg Config
 			json.Unmarshal(line, &cfg)
