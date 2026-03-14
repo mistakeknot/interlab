@@ -80,7 +80,16 @@ func ReconstructState(path string) (*State, error) {
 		return nil, fmt.Errorf("read jsonl: %w", err)
 	}
 
-	for _, line := range bytes.Split(data, []byte("\n")) {
+	// Scan newlines in-place — avoids [][]byte allocation from bytes.Split.
+	for len(data) > 0 {
+		var line []byte
+		if idx := bytes.IndexByte(data, '\n'); idx >= 0 {
+			line = data[:idx]
+			data = data[idx+1:]
+		} else {
+			line = data
+			data = nil
+		}
 		if len(line) == 0 {
 			continue
 		}
