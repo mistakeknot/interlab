@@ -2,7 +2,7 @@
 
 ## Overview
 
-Autonomous experiment loop for Demarch — an Interverse MCP plugin providing 3 stateless tools (`init_experiment`, `run_experiment`, `log_experiment`) with JSONL persistence, git branch isolation, circuit breaker guards, and ic events bridge.
+Autonomous experiment loop for Demarch — an Interverse MCP plugin providing 7 MCP tools: 3 single-campaign tools (`init_experiment`, `run_experiment`, `log_experiment`) and 4 multi-campaign orchestration tools (`plan_campaigns`, `dispatch_campaigns`, `status_campaigns`, `synthesize_campaigns`). JSONL persistence, git branch isolation, circuit breaker guards, beads-backed coordination, and ic events bridge.
 
 ## Agent Quickstart
 
@@ -16,10 +16,12 @@ Autonomous experiment loop for Demarch — an Interverse MCP plugin providing 3 
 | Directory | Purpose |
 |-----------|---------|
 | `cmd/interlab-mcp/` | MCP server entry point (stdio) |
-| `internal/experiment/` | Core engine: tools, state model, ic bridge |
+| `internal/experiment/` | Single-campaign engine: tools, state model, ic bridge |
+| `internal/orchestration/` | Multi-campaign orchestration: plan, dispatch, status, synthesize |
 | `bin/` | Auto-build launcher (`launch-mcp.sh`) + compiled binary |
 | `.claude-plugin/` | Plugin manifest (`plugin.json`) |
-| `skills/autoresearch/` | Clavain `/autoresearch` skill (SKILL.md) |
+| `skills/autoresearch/` | Single-campaign `/autoresearch` skill |
+| `skills/autoresearch-multi/` | Multi-campaign `/autoresearch-multi` skill |
 | `hooks/` | SessionStart hook for campaign detection |
 | `scripts/` | Build and utility scripts |
 | `tests/structural/` | Python structural tests (plugin validation) |
@@ -97,6 +99,34 @@ bd update <id> --status=in_progress   # Claim work
 bd close <id>                         # Mark complete
 ```
 
+## Multi-Campaign Orchestration
+
+### Four Orchestration Tools
+
+1. **plan_campaigns** — Agent provides campaign specs + dependency graph → tool creates beads, directories, JSONL configs
+2. **dispatch_campaigns** — Reads plan, identifies ready campaigns (deps met), returns dispatch instructions
+3. **status_campaigns** — Reads bead state + JSONL per campaign, returns aggregate progress
+4. **synthesize_campaigns** — Reads completed results, generates cross-campaign report, closes parent bead
+
+### Beads-Backed Coordination
+
+Multi-campaign orchestration uses beads as the coordination layer:
+- **Parent bead** (epic) = the broad optimization goal
+- **Child beads** (tasks) = individual campaigns with `bd dep add` for ordering
+- State stored via `bd set-state`: `campaign_name`, `campaign_dir`, `campaign_ids`, `plan_timestamp`
+
+### Execution Model
+
+- Same-project campaigns: dispatch via Claude subagents, each running `/autoresearch`
+- Cross-project: session-level parallelism via intermux
+- Shared files: serial execution enforced by dependency edges
+- File conflicts detected at plan time — overlapping `files_in_scope` between parallel campaigns rejected
+
+### Skills
+
+- `/autoresearch` — Single-campaign loop (existing)
+- `/autoresearch-multi` — Multi-campaign orchestration: analyze → plan → dispatch → monitor → synthesize
+
 ## Key Dependencies
 
 | Dependency | Version | Purpose |
@@ -104,4 +134,5 @@ bd close <id>                         # Mark complete
 | `github.com/mark3labs/mcp-go` | v0.32.0 | MCP server framework (tool registration, stdio serving) |
 | Go stdlib | 1.23+ | JSON, os/exec, regexp, bufio |
 | `ic` CLI | optional | Event emission, run creation (best-effort) |
+| `bd` CLI | optional | Beads coordination for multi-campaign orchestration |
 | `git` | required | Branch creation, commit, revert |

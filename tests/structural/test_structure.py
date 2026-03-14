@@ -100,3 +100,46 @@ def test_go_tests_pass():
         text=True,
     )
     assert result.returncode == 0, f"Tests failed: {result.stdout}\n{result.stderr}"
+
+
+def test_orchestration_package_exists():
+    """Orchestration package must exist with all tool files."""
+    orch_dir = os.path.join(PLUGIN_ROOT, "internal", "orchestration")
+    assert os.path.isdir(orch_dir), "internal/orchestration/ not found"
+    required = ["register.go", "beads.go", "plan.go", "dispatch.go", "status.go", "synthesize.go"]
+    for name in required:
+        path = os.path.join(orch_dir, name)
+        assert os.path.exists(path), f"Missing orchestration file: {name}"
+
+
+def test_orchestration_register_exports():
+    """register.go must contain RegisterAll function."""
+    path = os.path.join(PLUGIN_ROOT, "internal", "orchestration", "register.go")
+    with open(path) as f:
+        content = f.read()
+    assert "func RegisterAll" in content
+    assert "PlanCampaignsTool" in content
+    assert "DispatchCampaignsTool" in content
+    assert "StatusCampaignsTool" in content
+    assert "SynthesizeCampaignsTool" in content
+
+
+def test_autoresearch_multi_skill():
+    """/autoresearch-multi skill must exist with SKILL.md."""
+    path = os.path.join(PLUGIN_ROOT, "skills", "autoresearch-multi", "SKILL.md")
+    assert os.path.exists(path), "autoresearch-multi SKILL.md not found"
+    with open(path) as f:
+        content = f.read()
+    assert "plan_campaigns" in content
+    assert "dispatch_campaigns" in content
+    assert "synthesize_campaigns" in content
+
+
+def test_plugin_json_skills():
+    """plugin.json must reference both skills."""
+    path = os.path.join(PLUGIN_ROOT, ".claude-plugin", "plugin.json")
+    with open(path) as f:
+        data = json.load(f)
+    skills = data.get("skills", [])
+    assert "./skills/autoresearch" in skills
+    assert "./skills/autoresearch-multi" in skills
