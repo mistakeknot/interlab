@@ -8,6 +8,10 @@ __pycache__/
 *.log
 .DS_Store
 
+# Campaign state (runtime, not source)
+interlab.jsonl
+.interlab-run.json
+
 # Dolt database files (added by bd init)
 .dolt/
 *.db
