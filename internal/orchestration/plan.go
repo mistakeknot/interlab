@@ -244,28 +244,46 @@ func validatePlan(input PlanInput) error {
 	if input.Goal == "" {
 		return fmt.Errorf("goal is required")
 	}
-	if len(input.Campaigns) == 0 {
+	campaigns := input.Campaigns
+	n := len(campaigns)
+	if n == 0 {
 		return fmt.Errorf("at least 1 campaign is required")
 	}
 
-	names := make(map[string]bool, len(input.Campaigns))
-	for _, c := range input.Campaigns {
-		if names[c.Name] {
-			return fmt.Errorf("duplicate campaign name: %q", c.Name)
+	// Single pass: validate fields and check duplicates via linear scan of
+	// the input slice itself (no map allocation needed for small N).
+	for i := 0; i < n; i++ {
+		c := &campaigns[i]
+		// Check duplicate against previously seen names.
+		for j := 0; j < i; j++ {
+			if campaigns[j].Name == c.Name {
+				return fmt.Errorf("duplicate campaign name: %q", c.Name)
+			}
 		}
-		names[c.Name] = true
-	}
-
-	for _, c := range input.Campaigns {
 		if c.Direction != "lower_is_better" && c.Direction != "higher_is_better" {
 			return fmt.Errorf("campaign %q: invalid direction %q (must be lower_is_better or higher_is_better)", c.Name, c.Direction)
 		}
 		if c.BenchmarkCommand == "" {
 			return fmt.Errorf("campaign %q: benchmark_command is required", c.Name)
 		}
-		for _, dep := range c.DependsOn {
-			if !names[dep] {
-				return fmt.Errorf("campaign %q: depends_on references unknown campaign %q", c.Name, dep)
+	}
+
+	// Validate depends_on references against the campaigns slice directly.
+	// Skip entirely if no campaign has dependencies (common case).
+	for i := 0; i < n; i++ {
+		if len(campaigns[i].DependsOn) == 0 {
+			continue
+		}
+		for _, dep := range campaigns[i].DependsOn {
+			found := false
+			for j := 0; j < n; j++ {
+				if campaigns[j].Name == dep {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("campaign %q: depends_on references unknown campaign %q", campaigns[i].Name, dep)
 			}
 		}
 	}
