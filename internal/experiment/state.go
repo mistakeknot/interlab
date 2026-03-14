@@ -81,8 +81,13 @@ func ReconstructState(path string) (*State, error) {
 	}
 	defer f.Close()
 
+	// Size scanner buffer to file — avoids 1MB allocation for small files.
+	bufSize := 64 * 1024 // 64KB default
+	if info, serr := f.Stat(); serr == nil && info.Size() < int64(bufSize) {
+		bufSize = int(info.Size()) + 512 // small margin for safety
+	}
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // 1MB lines
+	scanner.Buffer(make([]byte, bufSize), 1024*1024)
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
