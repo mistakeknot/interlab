@@ -1,6 +1,202 @@
 package orchestration
 
-import "fmt"
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mistakeknot/interlab/internal/experiment"
+)
+
+// PlanCampaignsTool is the MCP tool definition for plan_campaigns.
+var PlanCampaignsTool = mcp.NewTool("plan_campaigns",
+	mcp.WithDescription("Create a multi-campaign experiment plan. Accepts campaign specs, creates beads and working directories, validates file conflicts."),
+	mcp.WithString("plan_json", mcp.Required(), mcp.Description("JSON object with goal, optional parent_bead_id, and campaigns array")),
+	mcp.WithString("working_directory", mcp.Description("Base directory for campaign subdirectories (default: cwd)")),
+)
+
+// HandlePlanCampaigns implements the plan_campaigns tool.
+func HandlePlanCampaigns(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	planJSON := req.GetString("plan_json", "")
+	if planJSON == "" {
+		return mcp.NewToolResultText("plan_json is required"), nil
+	}
+
+	// Parse plan input.
+	var input PlanInput
+	if err := json.Unmarshal([]byte(planJSON), &input); err != nil {
+		return mcp.NewToolResultText(fmt.Sprintf("invalid plan_json: %v", err)), nil
+	}
+
+	// Validate plan structure.
+	if err := validatePlan(input); err != nil {
+		return mcp.NewToolResultText(fmt.Sprintf("plan validation failed: %v", err)), nil
+	}
+
+	// Check for file conflicts between independent campaigns.
+	conflicts := detectFileConflicts(input.Campaigns)
+	if len(conflicts) > 0 {
+		var b strings.Builder
+		fmt.Fprintf(&b, "## File Conflicts Detected\n\n")
+		fmt.Fprintf(&b, "The following files are modified by independent campaigns that could run in parallel:\n\n")
+		for _, c := range conflicts {
+			fmt.Fprintf(&b, "- **%s** touched by: %s\n", c.File, strings.Join(c.Campaigns, ", "))
+		}
+		fmt.Fprintf(&b, "\nResolve conflicts by adding `depends_on` edges or splitting files before proceeding.")
+		return mcp.NewToolResultText(b.String()), nil
+	}
+
+	// Resolve working directory.
+	workDir := req.GetString("working_directory", "")
+	if workDir == "" {
+		var err error
+		workDir, err = os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("get working directory: %w", err)
+		}
+	}
+
+	// Create or reuse parent bead (best-effort).
+	parentBeadID := input.ParentID
+	if parentBeadID == "" {
+		id, err := bdCreate(
+			fmt.Sprintf("interlab: %s", input.Goal),
+			input.Goal,
+			"epic",
+			3,
+		)
+		if err == nil && id != "" {
+			parentBeadID = id
+		}
+		// Proceed without parent bead if bd is unavailable.
+	}
+
+	timestamp := time.Now().UTC().Format(time.RFC3339)
+	var campaignResults []CampaignResult
+	var childIDs []string
+
+	for _, cs := range input.Campaigns {
+		// Create campaign directory.
+		campaignDir := filepath.Join(workDir, "campaigns", cs.Name)
+		if err := os.MkdirAll(campaignDir, 0755); err != nil {
+			return nil, fmt.Errorf("create campaign directory %s: %w", campaignDir, err)
+		}
+
+		// Write JSONL config header for the campaign.
+		jsonlPath := filepath.Join(campaignDir, "interlab.jsonl")
+		cfg := experiment.Config{
+			Name:             cs.Name,
+			MetricName:       cs.MetricName,
+			MetricUnit:       cs.MetricUnit,
+			Direction:        cs.Direction,
+			BenchmarkCommand: cs.BenchmarkCommand,
+			WorkingDirectory: workDir,
+			FilesInScope:     cs.FilesInScope,
+		}
+		if err := experiment.WriteConfigHeader(jsonlPath, cfg); err != nil {
+			return nil, fmt.Errorf("write config header for campaign %s: %w", cs.Name, err)
+		}
+
+		// Create child bead (best-effort).
+		childBeadID := ""
+		id, err := bdCreate(
+			fmt.Sprintf("interlab/%s: %s", cs.Name, cs.MetricName),
+			fmt.Sprintf("Campaign %s — %s (%s, %s)", cs.Name, cs.MetricName, cs.MetricUnit, cs.Direction),
+			"task",
+			3,
+		)
+		if err == nil && id != "" {
+			childBeadID = id
+			childIDs = append(childIDs, id)
+
+			// Set campaign state on the child bead.
+			bdSetState(childBeadID, "campaign_name", cs.Name)
+			bdSetState(childBeadID, "campaign_dir", campaignDir)
+
+			// Add dependency: child depends on parent.
+			if parentBeadID != "" {
+				bdDepAdd(childBeadID, parentBeadID)
+			}
+		}
+
+		// Add depends_on edges between campaigns.
+		if childBeadID != "" {
+			for _, dep := range cs.DependsOn {
+				// Find the bead ID of the dependency campaign.
+				for _, prev := range campaignResults {
+					if prev.Name == dep && prev.BeadID != "" {
+						bdDepAdd(childBeadID, prev.BeadID)
+					}
+				}
+			}
+		}
+
+		campaignResults = append(campaignResults, CampaignResult{
+			Name:      cs.Name,
+			BeadID:    childBeadID,
+			Directory: campaignDir,
+			DependsOn: cs.DependsOn,
+		})
+	}
+
+	// Calculate max parallelism: count campaigns with no depends_on.
+	parallelism := 0
+	for _, cs := range input.Campaigns {
+		if len(cs.DependsOn) == 0 {
+			parallelism++
+		}
+	}
+
+	// Store plan metadata on parent bead.
+	if parentBeadID != "" {
+		bdSetState(parentBeadID, "campaign_count", fmt.Sprintf("%d", len(input.Campaigns)))
+		bdSetState(parentBeadID, "campaign_ids", strings.Join(childIDs, ","))
+		bdSetState(parentBeadID, "plan_timestamp", timestamp)
+	}
+
+	// Build result.
+	result := PlanResult{
+		ParentBeadID: parentBeadID,
+		Campaigns:    campaignResults,
+		Parallelism:  parallelism,
+		Conflicts:    conflicts,
+	}
+
+	// Marshal result JSON for embedding in response.
+	resultJSON, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshal result: %w", err)
+	}
+
+	// Build markdown summary.
+	var b strings.Builder
+	fmt.Fprintf(&b, "## Plan Created\n\n")
+	fmt.Fprintf(&b, "**Goal:** %s\n", input.Goal)
+	if parentBeadID != "" {
+		fmt.Fprintf(&b, "**Parent bead:** %s\n", parentBeadID)
+	}
+	fmt.Fprintf(&b, "**Campaigns:** %d | **Max parallelism:** %d\n\n", len(campaignResults), parallelism)
+
+	for _, cr := range campaignResults {
+		fmt.Fprintf(&b, "- **%s** → `%s`", cr.Name, cr.Directory)
+		if cr.BeadID != "" {
+			fmt.Fprintf(&b, " (bead: %s)", cr.BeadID)
+		}
+		if len(cr.DependsOn) > 0 {
+			fmt.Fprintf(&b, " [depends on: %s]", strings.Join(cr.DependsOn, ", "))
+		}
+		fmt.Fprintf(&b, "\n")
+	}
+
+	fmt.Fprintf(&b, "\n```json\n%s\n```\n", string(resultJSON))
+
+	return mcp.NewToolResultText(b.String()), nil
+}
 
 // CampaignSpec describes a single experiment campaign within a plan.
 type CampaignSpec struct {
