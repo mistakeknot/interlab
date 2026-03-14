@@ -2,6 +2,7 @@ package experiment
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -83,30 +84,26 @@ func ReconstructState(path string) (*State, error) {
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // 1MB lines
 
-	// Lightweight struct for type discrimination — avoids allocating map[string]interface{}.
-	type typeOnly struct {
-		Type string `json:"type"`
-	}
-
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
 		}
 
-		var peek typeOnly
-		if err := json.Unmarshal(line, &peek); err != nil {
-			continue // skip malformed lines
+		// Byte-level type detection — avoids JSON parse for type discrimination.
+		// We control the JSONL output so "type" is always present near the start.
+		isConfig := bytes.Contains(line, []byte(`"type":"config"`))
+		isResult := bytes.Contains(line, []byte(`"type":"result"`))
+		if !isConfig && !isResult {
+			continue
 		}
 
-		switch peek.Type {
-		case "config":
+		if isConfig {
 			var cfg Config
 			json.Unmarshal(line, &cfg)
 			defaults(&cfg)
 			s.Config = cfg
 			s.SegmentID++
-			// Reset per-segment counters
 			s.RunCount = 0
 			s.KeptCount = 0
 			s.DiscardedCount = 0
@@ -116,8 +113,7 @@ func ReconstructState(path string) (*State, error) {
 			s.BestMetric = 0
 			s.HasBaseline = false
 			s.SecondaryMetricKeys = nil
-
-		case "result":
+		} else {
 			var res Result
 			json.Unmarshal(line, &res)
 			s.RunCount++
@@ -146,7 +142,6 @@ func ReconstructState(path string) (*State, error) {
 				s.ConsecutiveNoImprove++
 			}
 
-			// Track secondary metric keys
 			if len(res.SecondaryMetrics) > 0 && s.SecondaryMetricKeys == nil {
 				keys := make([]string, 0, len(res.SecondaryMetrics))
 				for k := range res.SecondaryMetrics {
