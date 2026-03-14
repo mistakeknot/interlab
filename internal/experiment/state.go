@@ -1,7 +1,6 @@
 package experiment
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -73,25 +72,15 @@ func defaults(cfg *Config) {
 func ReconstructState(path string) (*State, error) {
 	s := &State{}
 
-	f, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return s, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("open jsonl: %w", err)
+		return nil, fmt.Errorf("read jsonl: %w", err)
 	}
-	defer f.Close()
 
-	// Size scanner buffer to file — avoids 1MB allocation for small files.
-	bufSize := 64 * 1024 // 64KB default
-	if info, serr := f.Stat(); serr == nil && info.Size() < int64(bufSize) {
-		bufSize = int(info.Size()) + 512 // small margin for safety
-	}
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, bufSize), 1024*1024)
-
-	for scanner.Scan() {
-		line := scanner.Bytes()
+	for _, line := range bytes.Split(data, []byte("\n")) {
 		if len(line) == 0 {
 			continue
 		}
@@ -175,7 +164,7 @@ func ReconstructState(path string) (*State, error) {
 		}
 	}
 
-	return s, scanner.Err()
+	return s, nil
 }
 
 // extractMetricValue extracts "metric_value":N from JSON bytes without parsing.
