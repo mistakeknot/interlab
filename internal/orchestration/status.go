@@ -52,7 +52,7 @@ func HandleStatusCampaigns(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 
 	campaignIDs := strings.Split(campaignIDsRaw, ",")
 
-	var statuses []CampaignStatus
+	statuses := make([]CampaignStatus, 0, len(campaignIDs))
 	totalRuns := 0
 	totalKept := 0
 	completedCount := 0
@@ -108,42 +108,48 @@ func HandleStatusCampaigns(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 		statuses = append(statuses, cs)
 	}
 
-	// Build markdown summary.
+	// Build markdown summary. Pre-size for ~256 bytes per campaign.
 	var b strings.Builder
-	fmt.Fprintf(&b, "## Campaign Status\n\n")
+	b.Grow(256 * (len(statuses) + 1))
+	b.WriteString("## Campaign Status\n\n")
 	fmt.Fprintf(&b, "**Parent bead:** %s\n", parentBeadID)
 	fmt.Fprintf(&b, "**Campaigns:** %d | **Completed:** %d | **Total runs:** %d | **Total kept:** %d\n\n", len(statuses), completedCount, totalRuns, totalKept)
 
-	for _, cs := range statuses {
+	for i := range statuses {
+		cs := &statuses[i]
 		icon := statusIcon(cs.BeadStatus)
-		fmt.Fprintf(&b, "### %s %s\n", icon, cs.Name)
+		b.WriteString("### ")
+		b.WriteString(icon)
+		b.WriteByte(' ')
+		b.WriteString(cs.Name)
+		b.WriteByte('\n')
 		fmt.Fprintf(&b, "- **Bead:** %s (%s)\n", cs.BeadID, cs.BeadStatus)
 		fmt.Fprintf(&b, "- **Runs:** %d — kept: %d, discarded: %d, crashed: %d\n", cs.RunCount, cs.KeptCount, cs.DiscardedCount, cs.CrashCount)
 
 		if cs.HasBaseline {
-			improvement := cs.BestMetric - cs.BaselineMetric
+			// For lower_is_better, improvement = baseline - best (positive means better).
+			// For higher_is_better, improvement = best - baseline (positive means better).
+			var improvement float64
+			if cs.Direction == "lower_is_better" {
+				improvement = cs.BaselineMetric - cs.BestMetric
+			} else {
+				improvement = cs.BestMetric - cs.BaselineMetric
+			}
 			pct := 0.0
 			if cs.BaselineMetric != 0 {
 				pct = (improvement / cs.BaselineMetric) * 100
 			}
 			dirLabel := "improvement"
-			if cs.Direction == "lower_is_better" {
-				// For lower_is_better, negative change is improvement.
-				improvement = cs.BaselineMetric - cs.BestMetric
-				if cs.BaselineMetric != 0 {
-					pct = (improvement / cs.BaselineMetric) * 100
-				}
-			}
 			if pct < 0 {
 				dirLabel = "regression"
 				pct = -pct
 			}
 			fmt.Fprintf(&b, "- **%s:** %.2f → %.2f %s (%.1f%% %s)\n", cs.MetricName, cs.BaselineMetric, cs.BestMetric, cs.MetricUnit, pct, dirLabel)
 		} else if cs.RunCount == 0 {
-			fmt.Fprintf(&b, "- *No runs yet*\n")
+			b.WriteString("- *No runs yet*\n")
 		}
 
-		fmt.Fprintf(&b, "\n")
+		b.WriteByte('\n')
 	}
 
 	return mcp.NewToolResultText(b.String()), nil
