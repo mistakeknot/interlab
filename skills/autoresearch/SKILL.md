@@ -170,7 +170,11 @@ Stop the loop when ANY of these are true:
 - **Metric converged**: Last 5 experiments show <1% variance from the best value
 - **Hard constraint violated**: Tests broken in a way you can't fix, or API contract changed
 
-When stopping, write a final summary to `interlab.md`:
+When stopping:
+
+### 1. Write Final Summary
+
+Add to `interlab.md`:
 
 ```markdown
 ## Final Summary
@@ -181,6 +185,23 @@ When stopping, write a final summary to `interlab.md`:
 - **Key wins**: <top 2-3 changes that moved the needle>
 - **Key insights**: <what you learned about this codebase/metric>
 ```
+
+### 2. Archive the Campaign
+
+Completed campaigns are saved to `campaigns/<name>/` for future reference:
+
+```bash
+mkdir -p campaigns/<name>
+cp interlab.jsonl campaigns/<name>/results.jsonl
+```
+
+Write `campaigns/<name>/learnings.md` with validated insights, dead ends, and generalizable patterns (see template in Learnings Document section below).
+
+Update `campaigns/README.md` index table with the campaign summary row.
+
+### 3. Clean Up
+
+Delete `interlab.jsonl` and `interlab.md` from the working directory — the archived copies in `campaigns/` are the permanent record. The next campaign starts fresh.
 
 ## Resuming a Campaign
 

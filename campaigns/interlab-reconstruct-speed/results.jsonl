@@ -1,0 +1,1 @@
+{"type":"config","name":"interlab-reconstruct-speed","metric_name":"reconstruct_100_ns","metric_unit":"ns","direction":"lower_is_better","benchmark_command":"bash interlab.sh","working_directory":"/home/mk/projects/Demarch/interverse/interlab","max_experiments":50,"max_crashes":3,"max_no_improvement":10,"timestamp":"2026-03-13T22:53:57Z"}
