@@ -12,6 +12,7 @@
     }
   },
   "skills": [
-    "./skills/autoresearch"
+    "./skills/autoresearch",
+    "./skills/autoresearch-multi"
   ]
 }
