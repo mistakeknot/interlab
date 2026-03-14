@@ -119,7 +119,12 @@ func ReconstructState(path string) (*State, error) {
 			s.HasBaseline = false
 			s.SecondaryMetricKeys = nil
 		} else {
-			var res Result
+			// Lightweight result struct — only decode fields needed for state.
+			var res struct {
+				Decision         string             `json:"decision"`
+				MetricValue      float64            `json:"metric_value"`
+				SecondaryMetrics map[string]float64 `json:"secondary_metrics"`
+			}
 			json.Unmarshal(line, &res)
 			s.RunCount++
 
