@@ -1,6 +1,6 @@
 {
   "name": "interlab",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "description": "Autonomous experiment loop — init, run, log experiments with JSONL persistence, git isolation, and ic events bridge.",
   "author": { "name": "mistakeknot" },
   "license": "MIT",
