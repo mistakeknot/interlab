@@ -108,6 +108,22 @@ Create `interlab.md` in the working directory:
 2. Call `log_experiment` with `decision: "keep"` and `description: "baseline measurement"`.
 3. Update `interlab.md` with the baseline value under "What's Been Tried".
 
+### Step 6: Query Prior Mutations (if mutation store available)
+
+After establishing baseline, check for prior approaches on this task type:
+
+1. Call `mutation_query` with:
+   - `task_type`: the campaign's task type (e.g., "agent-quality", "plugin-quality")
+   - `is_new_best`: true (only successful approaches)
+   - `limit`: 10
+
+2. If results returned, add to `interlab.md` under "## Prior Approaches (from mutation store)":
+   - List each prior approach: hypothesis, quality_signal, campaign_id
+   - Mark which ones are "known good" (is_new_best=true) and "known dead ends" (recorded but not new_best)
+   - These seed the agent's hypothesis generation — avoid re-exploring dead ends
+
+3. If `mutation_query` fails or returns empty: continue normally. The mutation store is optional.
+
 ## Loop Phase
 
 **LOOP FOREVER. Never ask "should I continue?" Never pause to check in. The circuit breaker is the safety net — trust it.**
@@ -149,6 +165,21 @@ Call `run_experiment`. Read the output carefully:
 | Benchmark crashed (non-zero exit, timeout, error) | `"crash"` | Changes reverted automatically |
 
 Call `log_experiment` with the decision and a description of what you changed and why.
+
+### 5b. Record Mutation
+
+After each `log_experiment` call, record the mutation for provenance tracking:
+
+1. Call `mutation_record` with:
+   - `task_type`: campaign's task type
+   - `hypothesis`: the description passed to log_experiment
+   - `quality_signal`: the metric value from run_experiment
+   - `campaign_id`: the campaign name
+   - `inspired_by`: if the hypothesis was explicitly inspired by a prior approach from the mutation query, include that session_id
+
+2. Note whether `is_new_best` was true — this signals a meaningful improvement.
+
+3. If `mutation_record` fails: log a warning but do NOT stop the campaign. Mutation recording is best-effort.
 
 **Important:** `log_experiment` handles git operations. On "keep", it stages in-scope files and commits. On "discard" or "crash", it reverts in-scope files. Do NOT run git commands yourself.
 
