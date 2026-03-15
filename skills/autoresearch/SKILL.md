@@ -124,6 +124,21 @@ After establishing baseline, check for prior approaches on this task type:
 
 3. If `mutation_query` fails or returns empty: continue normally. The mutation store is optional.
 
+#### Cross-Session Discovery (if interlock available)
+
+In addition to the local mutation store, check for broadcasts from parallel sessions:
+
+1. Call `list_topic_messages` with `topic: "mutation"` to get recent mutation broadcasts from other agents.
+
+2. For each broadcast message:
+   - Parse the JSON body to extract task_type, hypothesis, quality_signal, is_new_best
+   - If `task_type` matches the current campaign's task type, add to the "Prior Approaches" section
+   - Mark these as "cross-session" to distinguish from local mutation store results
+
+3. If `list_topic_messages` fails or is unavailable: continue with local mutation store only.
+
+This enables compound learning: Agent A's discovery feeds Agent B's hypothesis generation, even when they're running in different sessions.
+
 ## Loop Phase
 
 **LOOP FOREVER. Never ask "should I continue?" Never pause to check in. The circuit breaker is the safety net — trust it.**
@@ -180,6 +195,17 @@ After each `log_experiment` call, record the mutation for provenance tracking:
 2. Note whether `is_new_best` was true — this signals a meaningful improvement.
 
 3. If `mutation_record` fails: log a warning but do NOT stop the campaign. Mutation recording is best-effort.
+
+### 5c. Broadcast Mutation (if interlock available)
+
+After recording the mutation, broadcast it so parallel sessions can discover this approach:
+
+1. Call `broadcast_message` with:
+   - `topic`: `"mutation"`
+   - `subject`: `"[<campaign_name>] <keep|discard|crash>: <hypothesis summary>"`
+   - `body`: JSON string with: `{"task_type": "<type>", "hypothesis": "<description>", "quality_signal": <value>, "is_new_best": <bool>, "campaign_id": "<name>", "session_id": "<id>"}`
+
+2. If `broadcast_message` fails or is unavailable (interlock not loaded): continue silently. Broadcasting is best-effort.
 
 **Important:** `log_experiment` handles git operations. On "keep", it stages in-scope files and commits. On "discard" or "crash", it reverts in-scope files. Do NOT run git commands yourself.
 
