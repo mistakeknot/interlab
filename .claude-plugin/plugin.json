@@ -1,7 +1,7 @@
 {
   "name": "interlab",
-  "version": "0.3.7",
-  "description": "Autonomous experiment loop — init, run, log experiments with JSONL persistence, git isolation, and ic events bridge.",
+  "version": "0.4.0",
+  "description": "Autonomous experiment loop with mutation provenance tracking — init, run, log experiments with JSONL persistence, git isolation, SQLite mutation store, and ic events bridge.",
   "author": { "name": "mistakeknot" },
   "license": "MIT",
   "mcpServers": {
