@@ -229,6 +229,17 @@ Clean up working directory: remove per-campaign `interlab.jsonl`, `interlab.md`,
 
 Keep `interlab-multi.md` as the permanent multi-campaign record.
 
+### Step 4: Broadcast Aggregate Results (if interlock available)
+
+After synthesis completes, broadcast the campaign results so future sessions benefit:
+
+1. For each campaign that improved its metric, call `broadcast_message` with:
+   - `topic`: `"mutation"`
+   - `subject`: `"[multi:<parent_bead>] <campaign_name> improved <metric> by <delta>%"`
+   - `body`: JSON with the best approach for each campaign (task_type, hypothesis, quality_signal, campaign_id)
+
+2. This is best-effort — failure does not block synthesis completion.
+
 ## Exit Conditions
 
 Stop orchestration when ANY of these are true:
