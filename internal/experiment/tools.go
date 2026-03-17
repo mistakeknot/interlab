@@ -1,9 +1,11 @@
 package experiment
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,7 +36,7 @@ var initExperimentTool = mcp.NewTool("init_experiment",
 )
 
 var runExperimentTool = mcp.NewTool("run_experiment",
-	mcp.WithDescription("Execute the benchmark command, capture output and timing. Checks circuit breaker before running."),
+	mcp.WithDescription("Execute the benchmark command, capture output and timing. Streams output to interlab.run.log in real-time (tail -f it for visibility). Checks circuit breaker before running."),
 	mcp.WithString("working_directory", mcp.Description("Directory containing interlab.jsonl (default: cwd)")),
 )
 
@@ -166,11 +168,27 @@ func handleRunExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 		workDir = cwd
 	}
 
-	// Execute benchmark
+	// Execute benchmark with real-time log file output.
+	// Output streams to interlab.run.log so the agent can tail -f it
+	// for visibility, while also capturing everything in memory for
+	// metric parsing after completion.
+	logPath := filepath.Join(cwd, runLogFile)
+	logFile, logErr := os.Create(logPath)
+	if logErr != nil {
+		return nil, fmt.Errorf("create run log: %w", logErr)
+	}
+
 	start := time.Now()
 	cmd := exec.CommandContext(ctx, "bash", "-c", state.Config.BenchmarkCommand)
 	cmd.Dir = workDir
-	output, cmdErr := cmd.CombinedOutput()
+
+	// Tee stdout+stderr to both the log file and an in-memory buffer.
+	var buf bytes.Buffer
+	cmd.Stdout = io.MultiWriter(&buf, logFile)
+	cmd.Stderr = io.MultiWriter(&buf, logFile)
+
+	cmdErr := cmd.Run()
+	logFile.Close()
 	durationMs := time.Since(start).Milliseconds()
 
 	exitCode := 0
@@ -182,7 +200,7 @@ func handleRunExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 		}
 	}
 
-	outputStr := string(output)
+	outputStr := buf.String()
 
 	// Parse METRIC lines
 	metrics := parseMetrics(outputStr)
@@ -221,6 +239,7 @@ func handleRunExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 	if tail != "" {
 		fmt.Fprintf(&b, "\n### Output (last 20 lines)\n```\n%s\n```\n", tail)
 	}
+	fmt.Fprintf(&b, "\nFull output: `%s`\n", logPath)
 
 	// Save run details for log_experiment
 	details := RunDetails{
@@ -274,6 +293,7 @@ func truncateTail(s string, n int) string {
 }
 
 const runDetailsFile = ".interlab-run.json"
+const runLogFile = "interlab.run.log"
 
 func writeRunDetails(dir string, d RunDetails) error {
 	data, err := json.Marshal(d)
@@ -418,8 +438,9 @@ func handleLogExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 		return nil, fmt.Errorf("write result: %w", wErr)
 	}
 
-	// Cleanup run details
+	// Cleanup run details and log file
 	os.Remove(filepath.Join(cwd, runDetailsFile))
+	os.Remove(filepath.Join(cwd, runLogFile))
 
 	// Emit ic event (best-effort)
 	EmitExperimentEvent(cfg, result)
