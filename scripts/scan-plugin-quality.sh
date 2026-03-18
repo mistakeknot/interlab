@@ -48,6 +48,12 @@ for plugin_path in "$PLUGIN_DIR"/*/; do
     struct_total=$(echo "$metrics" | grep -oP 'structural_tests_total=\K[\d.]+' || echo "0")
     build_passes=$(echo "$metrics" | grep -oP 'build_passes=\K[\d.]+' || echo "0")
 
+    # Check for interlab.sh (METRIC-readiness)
+    has_interlab=0
+    if [[ -f "${plugin_path}interlab.sh" ]]; then
+        has_interlab=1
+    fi
+
     results=$(echo "$results" | jq --arg name "$plugin_name" \
         --arg path "$plugin_path" \
         --argjson pqs "${pqs:-0}" \
@@ -56,6 +62,7 @@ for plugin_path in "$PLUGIN_DIR"/*/; do
         --argjson struct_pass "${struct_pass:-0}" \
         --argjson struct_total "${struct_total:-0}" \
         --argjson build "${build_passes:-0}" \
+        --argjson has_interlab "$has_interlab" \
         '. + [{
             name: $name,
             path: $path,
@@ -64,7 +71,8 @@ for plugin_path in "$PLUGIN_DIR"/*/; do
             audit_max: $audit_max,
             structural_pass: $struct_pass,
             structural_total: $struct_total,
-            build_passes: $build
+            build_passes: $build,
+            has_interlab: $has_interlab
         }]')
 done
 
@@ -84,10 +92,13 @@ if [[ "$JSON_OUTPUT" == true ]]; then
 else
     echo "Plugin Quality Scan: $total plugins scored (avg PQS: $(printf '%.3f' "$avg_pqs"))"
     echo ""
+    interlab_count=$(echo "$sorted" | jq '[.[] | select(.has_interlab == 1)] | length')
+    echo "METRIC-ready: $interlab_count / $total plugins have interlab.sh"
+    echo ""
     echo "Bottom $TOP_N (improvement targets):"
-    echo "| Plugin | PQS | Audit | Build | Struct |"
-    echo "|--------|-----|-------|-------|--------|"
-    echo "$bottom" | jq -r '.[] | "| \(.name) | \(.pqs | tostring | .[0:5]) | \(.audit_score)/\(.audit_max) | \(.build_passes) | \(.structural_pass)/\(.structural_total) |"'
+    echo "| Plugin | PQS | Audit | Build | Struct | Interlab |"
+    echo "|--------|-----|-------|-------|--------|----------|"
+    echo "$bottom" | jq -r '.[] | "| \(.name) | \(.pqs | tostring | .[0:5]) | \(.audit_score)/\(.audit_max) | \(.build_passes) | \(.structural_pass)/\(.structural_total) | \(if .has_interlab == 1 then "Y" else "-" end) |"'
     echo ""
     echo "Full ranking:"
     echo "$sorted" | jq -r '.[] | "\(.pqs | tostring | .[0:5]) \(.name)"'
