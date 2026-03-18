@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Interlab campaign template: config parameter sweep
+#
+# Iterates a YAML config value through a range and measures impact.
+# Each iteration: set value → run benchmark → record metric → restore value.
+# Outputs one METRIC line per iteration for interlab to track.
+#
+# Usage: bash campaigns/<name>/benchmark.sh
+
+MONOREPO="$(cd "$(dirname "$0")/../../../.." && pwd)"
+
+# --- CONFIGURE THESE ---
+CONFIG_FILE="{{CONFIG_FILE}}"       # e.g., interverse/interflux/config/flux-drive/budget.yaml
+CONFIG_KEY="{{CONFIG_KEY}}"         # e.g., dropout.threshold (dot-separated YAML path)
+VALUES=({{VALUES}})                 # e.g., 0.5 0.6 0.7 0.8 0.9
+BENCHMARK_CMD="{{BENCHMARK_CMD}}"   # e.g., bash campaigns/agent-dropout/benchmark.sh
+METRIC_NAME="{{METRIC_NAME}}"       # e.g., agent_tokens_per_review
+# --- END CONFIGURE ---
+
+CONFIG_PATH="$MONOREPO/$CONFIG_FILE"
+
+if ! command -v yq >/dev/null 2>&1; then
+  echo "METRIC ${METRIC_NAME}=-1"
+  echo "METRIC error=1"
+  echo "METRIC error_msg=yq_not_found"
+  exit 0
+fi
+
+if [[ ! -f "$CONFIG_PATH" ]]; then
+  echo "METRIC ${METRIC_NAME}=-1"
+  echo "METRIC error=1"
+  echo "METRIC error_msg=config_not_found"
+  exit 0
+fi
+
+# Save original value
+ORIGINAL=$(yq -r ".${CONFIG_KEY}" "$CONFIG_PATH" 2>/dev/null) || ORIGINAL=""
+
+# Sweep through values
+BEST_VALUE=""
+BEST_METRIC=""
+
+for val in "${VALUES[@]}"; do
+  # Set config value (uses temp file for yq -i safety)
+  TMP=$(mktemp)
+  yq ".${CONFIG_KEY} = ${val}" "$CONFIG_PATH" > "$TMP" && mv "$TMP" "$CONFIG_PATH"
+
+  # Run benchmark and capture primary metric
+  OUTPUT=$(bash -c "$BENCHMARK_CMD" 2>/dev/null) || OUTPUT=""
+  METRIC_VAL=$(echo "$OUTPUT" | grep "^METRIC ${METRIC_NAME}=" | head -1 | cut -d= -f2) || METRIC_VAL="-1"
+
+  echo "METRIC sweep_${val}_${METRIC_NAME}=${METRIC_VAL}"
+
+  # Track best (lower is better by default)
+  if [[ -z "$BEST_METRIC" ]] || (( $(echo "$METRIC_VAL < $BEST_METRIC" | bc -l 2>/dev/null || echo 0) )); then
+    BEST_VALUE="$val"
+    BEST_METRIC="$METRIC_VAL"
+  fi
+done
+
+# Restore original value
+if [[ -n "$ORIGINAL" ]]; then
+  TMP=$(mktemp)
+  yq ".${CONFIG_KEY} = ${ORIGINAL}" "$CONFIG_PATH" > "$TMP" && mv "$TMP" "$CONFIG_PATH"
+fi
+
+# Report best
+echo "METRIC ${METRIC_NAME}=${BEST_METRIC:-0}"
+echo "METRIC best_value=${BEST_VALUE:-unknown}"
+echo "METRIC sweep_count=${#VALUES[@]}"

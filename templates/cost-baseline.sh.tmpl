@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Interlab campaign template: cost baseline comparison
+#
+# Captures cost_per_landable_change before and after a change.
+# The "before" snapshot is taken once and cached; subsequent runs compare against it.
+#
+# Usage: bash campaigns/<name>/benchmark.sh
+
+MONOREPO="$(cd "$(dirname "$0")/../../../.." && pwd)"
+COST_SCRIPT=""
+for p in \
+  "$MONOREPO/interverse/interstat/scripts/cost-query.sh" \
+  "${HOME}/.claude/plugins/cache/interagency-marketplace/clavain/0.6.209/../interstat/scripts/cost-query.sh" \
+; do
+  [[ -f "$p" ]] && COST_SCRIPT="$p" && break
+done
+
+if [[ -z "$COST_SCRIPT" ]]; then
+  echo "METRIC cost_per_landable_change=-1"
+  echo "METRIC error=1"
+  echo "METRIC error_msg=cost-query.sh_not_found"
+  exit 0
+fi
+
+# --- CONFIGURE THESE ---
+BEAD_FILTER="{{BEAD_ID}}"    # e.g., Demarch-1x9l.2 (empty = global baseline)
+SINCE_FILTER="{{SINCE}}"     # e.g., 2026-03-15T00:00:00Z (empty = all time)
+# --- END CONFIGURE ---
+
+ARGS=("baseline")
+[[ -n "$BEAD_FILTER" ]] && ARGS+=("--bead=$BEAD_FILTER")
+[[ -n "$SINCE_FILTER" ]] && ARGS+=("--since=$SINCE_FILTER")
+
+RAW=$(bash "$COST_SCRIPT" "${ARGS[@]}" 2>/dev/null) || {
+  echo "METRIC cost_per_landable_change=-1"
+  echo "METRIC error=1"
+  exit 0
+}
+
+# Parse JSON output
+COST=$(echo "$RAW" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['north_star']['usd_per_landable_change'])" 2>/dev/null) || COST="-1"
+TOKENS=$(echo "$RAW" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['north_star']['tokens_per_landable_change'])" 2>/dev/null) || TOKENS="-1"
+SESSIONS=$(echo "$RAW" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['measurement_window']['sessions'])" 2>/dev/null) || SESSIONS="0"
+LANDED=$(echo "$RAW" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['landed_changes']['count'])" 2>/dev/null) || LANDED="0"
+
+echo "METRIC cost_per_landable_change=$COST"
+echo "METRIC tokens_per_landable_change=$TOKENS"
+echo "METRIC sessions=$SESSIONS"
+echo "METRIC landed_changes=$LANDED"

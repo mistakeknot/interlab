@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Interlab campaign template: Go benchmark wrapper
+#
+# Wraps go test -bench into METRIC format via go-bench-harness.sh.
+# Copy this file, replace {{PLACEHOLDERS}}, and reference from your campaign YAML.
+#
+# Usage: bash campaigns/<name>/benchmark.sh
+
+MONOREPO="$(cd "$(dirname "$0")/../../../.." && pwd)"
+HARNESS="${INTERLAB_HARNESS:-$MONOREPO/interverse/interlab/scripts/go-bench-harness.sh}"
+
+# --- CONFIGURE THESE ---
+PKG="{{PKG}}"           # e.g., ./priompt/
+BENCH="{{BENCH}}"       # e.g., BenchmarkRender100$
+METRIC="{{METRIC}}"     # e.g., render_100_ns
+DIR="{{DIR}}"           # e.g., masaq  (relative to monorepo root)
+# --- END CONFIGURE ---
+
+bash "$HARNESS" \
+  --pkg "$PKG" \
+  --bench "$BENCH" \
+  --metric "$METRIC" \
+  --dir "$MONOREPO/$DIR"
