@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Detect active interlab campaign and prompt resume.
 # SessionStart hook — runs at the start of each Claude Code session.
-set -euo pipefail
+set -uo pipefail
+trap 'exit 0' ERR
 
 JSONL="interlab.jsonl"
 
