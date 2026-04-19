@@ -15,3 +15,5 @@ interlab.jsonl
 # Dolt database files (added by bd init)
 .dolt/
 *.db
+interlab-mcp
+.clavain/
