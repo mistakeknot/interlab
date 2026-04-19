@@ -11,21 +11,44 @@ if [[ ! -f "$JSONL" ]]; then
     exit 0
 fi
 
-# Extract the campaign name from the last config line
-CAMPAIGN_NAME=$(grep '"type":"config"' "$JSONL" | tail -1 | python3 -c "
+# Determine the current campaign state by walking the JSONL: find the last
+# `config` line, then verify no `campaign_closed` event follows it. A closed
+# campaign must not trigger a resume prompt — the loop has already met its
+# target (or been abandoned).
+CAMPAIGN_NAME=$(python3 - "$JSONL" <<'PY' 2>/dev/null || echo "unknown"
 import json, sys
-for line in sys.stdin:
-    line = line.strip()
-    if line:
-        data = json.loads(line)
-        print(data.get('name', 'unknown'))
-        break
-" 2>/dev/null || echo "unknown")
+
+path = sys.argv[1]
+last_config = None
+last_config_idx = -1
+closed_after_config = False
+
+with open(path) as f:
+    for idx, line in enumerate(f):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        t = data.get("type")
+        if t == "config":
+            last_config = data.get("name", "unknown")
+            last_config_idx = idx
+            closed_after_config = False
+        elif t == "campaign_closed" and last_config_idx >= 0:
+            closed_after_config = True
+
+if last_config is None or closed_after_config:
+    print("unknown")
+else:
+    print(last_config)
+PY
+)
 
 if [[ "$CAMPAIGN_NAME" == "unknown" || -z "$CAMPAIGN_NAME" ]]; then
     exit 0
 fi
 
-# Check if there's an active segment (config without a subsequent "end" marker)
-# For now, presence of interlab.jsonl with a config line means active
 echo "Active interlab campaign detected: '$CAMPAIGN_NAME'. Read interlab.md and resume the experiment loop with /autoresearch."
