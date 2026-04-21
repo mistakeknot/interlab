@@ -1,6 +1,6 @@
 ---
 name: autoresearch-multi
-description: Run a multi-campaign optimization — decompose a broad goal into focused campaigns, dispatch them in parallel via subagents, monitor progress, and synthesize results. Use when optimizing multiple aspects of a module or exploring a hypothesis from multiple angles.
+description: Multi-campaign optimization — decompose a broad goal into focused campaigns, dispatch via parallel subagents, synthesize results. Use when optimizing multiple aspects or exploring a hypothesis from multiple angles.
 ---
 
 # /autoresearch-multi — Multi-Campaign Orchestration
