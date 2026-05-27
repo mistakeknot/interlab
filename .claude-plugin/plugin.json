@@ -16,5 +16,8 @@
   "skills": [
     "./skills/autoresearch",
     "./skills/autoresearch-multi"
+  ],
+  "peerDependencies": [
+    "interlock"
   ]
 }
