@@ -27,6 +27,51 @@ if [[ ! -f "$BENCHMARK" ]]; then
     exit 1
 fi
 
+extract_metric() {
+    local metrics="$1"
+    local key="$2"
+    local type="$3"
+    local plugin_name="$4"
+    local value
+
+    if ! value=$(printf '%s\n' "$metrics" | awk -v key="$key" '
+        $1 == "METRIC" {
+            prefix = key "="
+            if (index($2, prefix) == 1) {
+                value = substr($2, length(prefix) + 1)
+                count++
+            }
+        }
+        END {
+            if (count == 1) {
+                print value
+            } else {
+                exit 1
+            }
+        }
+    '); then
+        echo "Error: plugin $plugin_name emitted a missing or duplicate $key metric" >&2
+        return 1
+    fi
+
+    case "$type" in
+        integer)
+            if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+                echo "Error: plugin $plugin_name emitted nonnumeric $key metric: $value" >&2
+                return 1
+            fi
+            ;;
+        number)
+            if [[ ! "$value" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+                echo "Error: plugin $plugin_name emitted nonnumeric $key metric: $value" >&2
+                return 1
+            fi
+            ;;
+    esac
+
+    printf '%s\n' "$value"
+}
+
 # Collect results
 results="[]"
 
@@ -39,14 +84,17 @@ for plugin_path in "$PLUGIN_DIR"/*/; do
     fi
 
     # Run benchmark, capture METRIC lines
-    metrics=$(bash "$BENCHMARK" "$plugin_path" 2>/dev/null) || metrics=""
+    if ! metrics=$(bash "$BENCHMARK" "$plugin_path" 2>/dev/null); then
+        echo "Error: benchmark failed for plugin $plugin_name" >&2
+        exit 1
+    fi
 
-    pqs=$(echo "$metrics" | grep -oP 'plugin_quality_score=\K[\d.]+' || echo "0")
-    audit_score=$(echo "$metrics" | grep -oP 'audit_score=\K[\d.]+' || echo "0")
-    audit_max=$(echo "$metrics" | grep -oP 'audit_max=\K[\d.]+' || echo "19")
-    struct_pass=$(echo "$metrics" | grep -oP 'structural_tests_pass=\K[\d.]+' || echo "0")
-    struct_total=$(echo "$metrics" | grep -oP 'structural_tests_total=\K[\d.]+' || echo "0")
-    build_passes=$(echo "$metrics" | grep -oP 'build_passes=\K[\d.]+' || echo "0")
+    pqs=$(extract_metric "$metrics" "plugin_quality_score" "number" "$plugin_name") || exit 1
+    audit_score=$(extract_metric "$metrics" "audit_score" "integer" "$plugin_name") || exit 1
+    audit_max=$(extract_metric "$metrics" "audit_max" "integer" "$plugin_name") || exit 1
+    struct_pass=$(extract_metric "$metrics" "structural_tests_pass" "integer" "$plugin_name") || exit 1
+    struct_total=$(extract_metric "$metrics" "structural_tests_total" "integer" "$plugin_name") || exit 1
+    build_passes=$(extract_metric "$metrics" "build_passes" "integer" "$plugin_name") || exit 1
 
     # Check for interlab.sh (METRIC-readiness)
     has_interlab=0
