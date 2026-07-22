@@ -17,3 +17,6 @@ interlab.jsonl
 *.db
 interlab-mcp
 .clavain/
+
+# Local publish-approval marker (never committed)
+.publish-approved
