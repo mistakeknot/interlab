@@ -1,0 +1,23 @@
+{
+  "name": "interlab",
+  "version": "0.4.8",
+  "description": "Autonomous experiment loop with mutation provenance tracking — init, run, log experiments with JSONL persistence, git isolation, SQLite mutation store, and ic events bridge.",
+  "license": "MIT",
+  "author": "mistakeknot",
+  "interface": {
+    "displayName": "interlab",
+    "shortDescription": "Autonomous experiment loop with mutation provenance tracking — init, run, log experiments with JSONL persistence, git..."
+  },
+  "skills": "./skills/",
+  "mcpServers": {
+    "interlab": {
+      "command": "./bin/launch-mcp.sh"
+    }
+  },
+  "hooks": [
+    {
+      "event": "SessionStart",
+      "command": "bash ${KIMI_PLUGIN_ROOT}/hooks/detect-campaign.sh"
+    }
+  ]
+}
