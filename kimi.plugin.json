@@ -1,6 +1,6 @@
 {
   "name": "interlab",
-  "version": "0.4.8",
+  "version": "0.4.9",
   "description": "Autonomous experiment loop with mutation provenance tracking — init, run, log experiments with JSONL persistence, git isolation, SQLite mutation store, and ic events bridge.",
   "license": "MIT",
   "author": "mistakeknot",
@@ -17,7 +17,7 @@
   "hooks": [
     {
       "event": "SessionStart",
-      "command": "bash ${KIMI_PLUGIN_ROOT}/hooks/detect-campaign.sh"
+      "command": "bash"
     }
   ]
 }
