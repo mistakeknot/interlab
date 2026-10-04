@@ -1,8 +1,6 @@
 # interlab — Vision
 
 **Last updated:** 2026-03-14
-**PRD:** [`docs/prds/2026-03-14-multi-campaign-orchestration.md`](prds/2026-03-14-multi-campaign-orchestration.md)
-**Roadmap:** [`docs/interlab-roadmap.md`](interlab-roadmap.md)
 
 ## The Big Idea
 
