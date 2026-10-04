@@ -10,7 +10,7 @@ BINARY="${SCRIPT_DIR}/interlab-mcp"
 
 for candidate in \
     "$BINARY" \
-    "/home/mk/projects/Sylveste/interverse/interlab/bin/interlab-mcp" \
+    "${HOME}/projects/Sylveste/interverse/interlab/bin/interlab-mcp" \
     "${HOME}/.local/bin/interlab-mcp"
 do
     if [[ -x "$candidate" ]]; then
