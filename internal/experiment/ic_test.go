@@ -1,6 +1,7 @@
 package experiment
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -66,9 +67,13 @@ func TestCreateRunReportsIcFailure(t *testing.T) {
 }
 
 func TestCreateRunRejectsEmptyOutput(t *testing.T) {
-	fakeIC(t, `exit 0`)
-	if runID, err := CreateRun("test-bead"); err == nil {
+	fakeIC(t, `echo "warning: nothing created" >&2; exit 0`)
+	runID, err := CreateRun("test-bead")
+	if err == nil {
 		t.Fatalf("expected an error when ic prints no run id, got %q", runID)
+	}
+	if !strings.Contains(err.Error(), "nothing created") {
+		t.Errorf("error should carry ic's stderr, got: %v", err)
 	}
 }
 
@@ -108,7 +113,7 @@ func TestCreateRunAgainstRealIC(t *testing.T) {
 	init := exec.Command(icPath, "--db=.clavain/intercore.db", "init")
 	init.Dir = dir
 	if out, err := init.CombinedOutput(); err != nil {
-		t.Skipf("cannot initialise a scratch ic database: %v: %s", err, out)
+		t.Fatalf("cannot initialise a scratch ic database: %v: %s", err, out)
 	}
 	t.Chdir(dir)
 	runID, err := CreateRun("test-bead")
@@ -118,11 +123,17 @@ func TestCreateRunAgainstRealIC(t *testing.T) {
 	if runID == "" {
 		t.Fatal("CreateRun returned no run id")
 	}
-	show, err := exec.Command(icPath, "run", "status", runID).CombinedOutput()
+	show, err := exec.Command(icPath, "--json", "run", "status", runID).Output()
 	if err != nil {
-		t.Fatalf("ic run status %s: %v: %s", runID, err, show)
+		t.Fatalf("ic run status %s: %v", runID, err)
 	}
-	if !strings.Contains(string(show), "test-bead") {
-		t.Errorf("run %s does not carry the bead as its scope:\n%s", runID, show)
+	var status struct {
+		ScopeID string `json:"scope_id"`
+	}
+	if err := json.Unmarshal(show, &status); err != nil {
+		t.Fatalf("ic run status output is not JSON: %v: %s", err, show)
+	}
+	if status.ScopeID != "test-bead" {
+		t.Errorf("run %s scope_id = %q, want test-bead", runID, status.ScopeID)
 	}
 }

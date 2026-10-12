@@ -1,8 +1,8 @@
 package experiment
 
 import (
+	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -57,18 +57,22 @@ func CreateRun(beadID string) (string, error) {
 		args = append(args, fmt.Sprintf("--scope-id=%s", beadID))
 	}
 	args = append(args, fmt.Sprintf("--goal=%s", goal))
-	out, err := exec.Command("ic", args...).Output()
+	cmd := exec.Command("ic", args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	msg := strings.TrimSpace(stderr.String())
 	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			if msg := strings.TrimSpace(string(exitErr.Stderr)); msg != "" {
-				return "", fmt.Errorf("ic run create: %w: %s", err, msg)
-			}
+		if msg != "" {
+			return "", fmt.Errorf("ic run create: %w: %s", err, msg)
 		}
 		return "", fmt.Errorf("ic run create: %w", err)
 	}
 	id := strings.TrimSpace(string(out))
 	if id == "" {
+		if msg != "" {
+			return "", fmt.Errorf("ic run create: no run id printed: %s", msg)
+		}
 		return "", fmt.Errorf("ic run create: no run id printed")
 	}
 	return id, nil
