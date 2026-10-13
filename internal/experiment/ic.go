@@ -1,6 +1,7 @@
 package experiment
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -40,17 +41,39 @@ func EmitExperimentEvent(cfg Config, res Result) error {
 	return nil
 }
 
-// CreateRun creates an ic run for the experiment campaign. Best-effort.
+// CreateRun creates an ic run for the experiment campaign and returns its id.
+// The bead id is recorded as the run's scope. When ic is not on PATH it
+// returns ("", nil) so campaigns still work without the kernel; once ic is
+// found, a failed or empty create is an error, since the caller would
+// otherwise carry on with no run to attach events to.
 func CreateRun(beadID string) (string, error) {
 	if _, err := exec.LookPath("ic"); err != nil {
-		return "", nil
+		return "", nil // ic not available, degrade gracefully
 	}
-	out, err := exec.Command("ic", "run", "create",
-		fmt.Sprintf("--bead=%s", beadID),
-		"--phase=Experiment",
-	).Output()
+	goal := "interlab experiment campaign"
+	args := []string{"run", "create"}
+	if beadID != "" {
+		goal += " " + beadID
+		args = append(args, fmt.Sprintf("--scope-id=%s", beadID))
+	}
+	args = append(args, fmt.Sprintf("--goal=%s", goal))
+	cmd := exec.Command("ic", args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	msg := strings.TrimSpace(stderr.String())
 	if err != nil {
-		return "", nil // degrade gracefully
+		if msg != "" {
+			return "", fmt.Errorf("ic run create: %w: %s", err, msg)
+		}
+		return "", fmt.Errorf("ic run create: %w", err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	id := strings.TrimSpace(string(out))
+	if id == "" {
+		if msg != "" {
+			return "", fmt.Errorf("ic run create: no run id printed: %s", msg)
+		}
+		return "", fmt.Errorf("ic run create: no run id printed")
+	}
+	return id, nil
 }
