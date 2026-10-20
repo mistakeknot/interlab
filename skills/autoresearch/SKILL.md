@@ -66,7 +66,7 @@ echo "METRIC test_count=$(go test ./... -v 2>&1 | grep -c '^--- PASS')"
 ### Step 3: Initialize the Campaign
 
 Call `init_experiment` with:
-- `name`: short campaign name (e.g., "skaffen-test-speed")
+- `name`: short campaign name (e.g., "api-test-speed")
 - `metric_name`: primary metric to optimize (must match a METRIC line name)
 - `metric_unit`: unit (ms, bytes, ops/s, etc.)
 - `direction`: `"lower_is_better"` or `"higher_is_better"`

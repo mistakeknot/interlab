@@ -6,7 +6,7 @@
 
 ## Background
 
-Meadowsyn's UI is shifting from factory language to garden language. The deeper question: does the metaphor in agent *system prompts* affect coordination quality, autonomy, and decision-making?
+A product UI is shifting from factory language to garden language. The deeper question: does the metaphor in agent *system prompts* affect coordination quality, autonomy, and decision-making?
 
 Factory framing: "execute task", "dispatch agent", "queue depth", "blocked", "pipeline"
 Garden framing: "tend to", "seed work", "cultivate", "wilting", "pruning", "growth"
@@ -47,7 +47,7 @@ Search for:
 
 ### Phase 3: UI Text Variants
 
-If Phase 2 shows signal, extend garden vocabulary to Meadowsyn UI:
+If Phase 2 shows signal, extend garden vocabulary to the product UI:
 - Status labels: EXEC→TENDING, DISP→SEEDING, IDLE→RESTING, FAIL→WILTING, GATE→PRUNING
 - Make it a user-toggleable setting (factory mode / garden mode)
 

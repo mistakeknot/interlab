@@ -42,7 +42,7 @@ Read the codebase and identify optimization targets.
 ### Step 1: Understand the Goal
 
 Ask the user (or infer from context):
-- **What broad goal** to pursue (e.g., "make the Skaffen agent faster and smaller")
+- **What broad goal** to pursue (e.g., "make the build faster and smaller")
 - **Which module(s)** are in scope
 - **What constraints** apply globally (tests must pass, no API changes, etc.)
 - **How many campaigns** they expect (or let you decompose freely)
