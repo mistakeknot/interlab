@@ -27,7 +27,7 @@ func RegisterAll(s *server.MCPServer) {
 
 var initExperimentTool = mcp.NewTool("init_experiment",
 	mcp.WithDescription("Configure a new experiment campaign: metric, direction, benchmark command, files in scope."),
-	mcp.WithString("name", mcp.Required(), mcp.Description("Campaign name (e.g., 'skaffen-test-speed')")),
+	mcp.WithString("name", mcp.Required(), mcp.Description("Campaign name (e.g., 'api-test-speed')")),
 	mcp.WithString("metric_name", mcp.Required(), mcp.Description("Primary metric to optimize")),
 	mcp.WithString("metric_unit", mcp.Required(), mcp.Description("Unit of measurement (ms, bytes, score)")),
 	mcp.WithString("direction", mcp.Required(), mcp.Description("'lower_is_better' or 'higher_is_better'")),
