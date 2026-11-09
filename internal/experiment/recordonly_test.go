@@ -100,6 +100,20 @@ func TestRecordOnlyLeavesTreeByteIdentical(t *testing.T) {
 		}
 	}
 
+	// crash path and a missing/non-finite primary must not touch the tree either.
+	callTool(t, handleRunExperiment, map[string]interface{}{"working_directory": dir})
+	out := callTool(t, handleLogExperiment, map[string]interface{}{
+		"working_directory": dir, "decision": "crash", "description": "crashed"})
+	if !strings.Contains(out, "working tree untouched") {
+		t.Fatalf("crash output: %s", out)
+	}
+	writeRunDetails(dir, RunDetails{ExitCode: 1, Metrics: map[string]float64{}})
+	out = callTool(t, handleLogExperiment, map[string]interface{}{
+		"working_directory": dir, "decision": "record", "description": "no primary"})
+	if !strings.Contains(out, "missing or non-finite") {
+		t.Fatalf("record without primary should be refused: %s", out)
+	}
+
 	if after := treeSnapshot(t, dir, "code.go"); after != before {
 		t.Fatalf("working tree changed in record-only mode\nbefore:\n%s\nafter:\n%s", before, after)
 	}
@@ -168,5 +182,52 @@ func TestParseMetricsSkipsNonFinite(t *testing.T) {
 	}
 	if _, ok := m["lift_sigma"]; ok || math.IsNaN(m["lift"]) {
 		t.Errorf("non-finite value kept: %v", m)
+	}
+}
+
+func TestRecordOnlyCrashKeepsCandidateFile(t *testing.T) {
+	dir := recordRepo(t)
+	jsonl := filepath.Join(dir, "interlab.jsonl")
+	WriteConfigHeader(jsonl, Config{Name: "n", MetricName: "lift", Direction: "higher_is_better",
+		BenchmarkCommand: "exit 1", WorkingDirectory: dir, FilesInScope: []string{"code.go"}, RecordOnly: true})
+	before := treeSnapshot(t, dir, "code.go")
+	writeRunDetails(dir, RunDetails{ExitCode: 1, Metrics: map[string]float64{}})
+	callTool(t, handleLogExperiment, map[string]interface{}{"working_directory": dir, "decision": "crash", "description": "boom"})
+	if after := treeSnapshot(t, dir, "code.go"); after != before {
+		t.Fatalf("crash changed the tree in record-only mode\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
+
+func TestDefaultCampaignNaNPrimaryNotKeptAsZero(t *testing.T) {
+	dir := recordRepo(t)
+	jsonl := filepath.Join(dir, "interlab.jsonl")
+	WriteConfigHeader(jsonl, Config{Name: "n", MetricName: "m", Direction: "lower_is_better",
+		BenchmarkCommand: "echo METRIC m=NaN", WorkingDirectory: dir})
+	writeRunDetails(dir, RunDetails{Metrics: parseMetrics("METRIC m=NaN")})
+	out := callTool(t, handleLogExperiment, map[string]interface{}{"working_directory": dir, "decision": "keep", "description": "x"})
+	if !strings.Contains(out, "missing or non-finite") {
+		t.Fatalf("NaN primary accepted: %s", out)
+	}
+	s, _ := ReconstructState(jsonl)
+	if s.RunCount != 0 || s.HasBaseline {
+		t.Fatalf("zero recorded as result/baseline: %+v", s)
+	}
+}
+
+func TestPairedNonFinitePrimaryRecordsNoDelta(t *testing.T) {
+	dir := recordRepo(t)
+	jsonl := filepath.Join(dir, "interlab.jsonl")
+	WriteConfigHeader(jsonl, Config{Name: "n", MetricName: "lift", Direction: "higher_is_better",
+		BenchmarkCommand: "x", WorkingDirectory: dir, RecordOnly: true, BaselineMetric: "base"})
+	writeRunDetails(dir, RunDetails{Metrics: parseMetrics("METRIC lift=NaN\nMETRIC base=0.5")})
+	out := callTool(t, handleLogExperiment, map[string]interface{}{"working_directory": dir, "decision": "record", "description": "x"})
+	if !strings.Contains(out, "missing or non-finite") {
+		t.Fatalf("record accepted: %s", out)
+	}
+	writeRunDetails(dir, RunDetails{ExitCode: 1, Metrics: parseMetrics("METRIC lift=NaN\nMETRIC base=0.5")})
+	callTool(t, handleLogExperiment, map[string]interface{}{"working_directory": dir, "decision": "crash", "description": "x"})
+	data, _ := os.ReadFile(jsonl)
+	if strings.Contains(string(data), "delta_vs_baseline") || strings.Contains(string(data), "baseline_value") {
+		t.Fatalf("fabricated delta recorded:\n%s", data)
 	}
 }

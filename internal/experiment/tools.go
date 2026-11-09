@@ -379,7 +379,12 @@ func handleLogExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 	}
 
 	// Get primary metric value
-	primaryValue := details.Metrics[cfg.MetricName]
+	primaryValue, hasPrimary := details.Metrics[cfg.MetricName]
+	if !hasPrimary && (decision == "keep" || decision == "record") {
+		// A missing or non-finite (NaN/Inf) primary must never be stored as a
+		// zero success or a baseline. Log it as 'crash' (or 'discard') instead.
+		return mcp.NewToolResultText(fmt.Sprintf("primary metric %q is missing or non-finite in the last run: cannot record %q; log it as 'crash'", cfg.MetricName, decision)), nil
+	}
 
 	// Build secondary metrics (everything except primary)
 	var secondary map[string]float64
@@ -403,7 +408,7 @@ func handleLogExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 	}
 
 	// Same-run baseline arm, when the campaign names one.
-	if cfg.BaselineMetric != "" {
+	if cfg.BaselineMetric != "" && hasPrimary {
 		if base, ok := details.Metrics[cfg.BaselineMetric]; ok {
 			delta := primaryValue - base
 			result.BaselineValue = &base
@@ -460,8 +465,8 @@ func handleLogExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 		}
 
 	case "discard", "crash":
-		// Revert files in scope
-		if len(cfg.FilesInScope) > 0 {
+		// Revert files in scope (never in record-only campaigns)
+		if len(cfg.FilesInScope) > 0 && !cfg.RecordOnly {
 			for _, f := range cfg.FilesInScope {
 				checkoutCmd := exec.CommandContext(ctx, "git", "-C", workDir, "checkout", "--", f)
 				checkoutCmd.Run() // best-effort
@@ -470,7 +475,11 @@ func handleLogExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 
 		fmt.Fprintf(&b, "## Decision: %s — %s\n", decision, description)
 		fmt.Fprintf(&b, "- %s: %.4g %s\n", cfg.MetricName, primaryValue, cfg.MetricUnit)
-		fmt.Fprintf(&b, "- changes reverted\n")
+		if cfg.RecordOnly {
+			fmt.Fprintf(&b, "- record-only: working tree untouched\n")
+		} else {
+			fmt.Fprintf(&b, "- changes reverted\n")
+		}
 	}
 
 	// Write result to JSONL
