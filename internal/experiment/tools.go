@@ -13,7 +13,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -314,14 +313,10 @@ func truncateTail(s string, n int) string {
 const runDetailsFile = ".interlab-run.json"
 const runLogFile = "interlab.run.log"
 
-// createRunLog creates the run log without following a symlink at the final
-// path component and refuses anything that is not a regular file, so a planted
-// link can never redirect the truncating write onto a scoped file or .git.
+// createRunLog installs a fresh run log by temp-file rename, so a symlink or
+// hard link planted at the path is replaced rather than written through.
 func createRunLog(path string) (*os.File, error) {
-	if fi, err := os.Lstat(path); err == nil && !fi.Mode().IsRegular() {
-		return nil, fmt.Errorf("%s exists and is not a regular file (mode %s); refusing to write through it", path, fi.Mode().Type())
-	}
-	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0644)
+	return createFileReplacing(path)
 }
 
 func writeRunDetails(dir string, d RunDetails) error {
@@ -329,7 +324,7 @@ func writeRunDetails(dir string, d RunDetails) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, runDetailsFile), data, 0644)
+	return writeFileReplacing(filepath.Join(dir, runDetailsFile), data)
 }
 
 func readRunDetails(dir string) (*RunDetails, error) {

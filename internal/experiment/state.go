@@ -250,7 +250,7 @@ func WriteResult(path string, res Result) error {
 }
 
 func appendJSONL(path string, v interface{}) error {
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := openAppendSafe(path)
 	if err != nil {
 		return err
 	}

@@ -232,22 +232,100 @@ func TestPairedNonFinitePrimaryRecordsNoDelta(t *testing.T) {
 	}
 }
 
-func TestRunLogSymlinkRefused(t *testing.T) {
+func TestArtifactsNeverWriteThroughLinks(t *testing.T) {
+	type artifact struct {
+		name      string
+		write     func(t *testing.T, dir string) error
+		wantError bool // append-only artifacts refuse; whole-file ones replace the entry
+	}
+	arts := []artifact{
+		{runLogFile, func(t *testing.T, dir string) error {
+			req := mcp.CallToolRequest{}
+			req.Params.Arguments = map[string]interface{}{"working_directory": dir}
+			_, err := handleRunExperiment(context.Background(), req)
+			return err
+		}, false},
+		{runDetailsFile, func(t *testing.T, dir string) error {
+			return writeRunDetails(dir, RunDetails{Metrics: map[string]float64{"lift": 1}})
+		}, false},
+		{"interlab.jsonl", func(t *testing.T, dir string) error {
+			return WriteResult(filepath.Join(dir, "interlab.jsonl"), Result{Decision: "record"})
+		}, true},
+	}
+	for _, a := range arts {
+		for _, target := range []string{"code.go", filepath.Join(".git", "index")} {
+			for _, kind := range []string{"symlink", "hardlink"} {
+				t.Run(a.name+"/"+filepath.Base(target)+"/"+kind, func(t *testing.T) {
+					dir := recordRepo(t)
+					if a.name != "interlab.jsonl" {
+						WriteConfigHeader(filepath.Join(dir, "interlab.jsonl"), Config{Name: "n", MetricName: "lift",
+							Direction: "higher_is_better", BenchmarkCommand: "echo METRIC lift=1", WorkingDirectory: dir, RecordOnly: true})
+					}
+					tpath := filepath.Join(dir, target)
+					want, err := os.ReadFile(tpath)
+					if err != nil {
+						t.Fatal(err)
+					}
+					link := filepath.Join(dir, a.name)
+					if kind == "symlink" {
+						err = os.Symlink(tpath, link)
+					} else {
+						err = os.Link(tpath, link)
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					werr := a.write(t, dir)
+					if a.wantError && werr == nil {
+						t.Fatal("append through a link should be refused")
+					}
+					if !a.wantError && werr != nil {
+						t.Fatalf("write failed: %v", werr)
+					}
+					if got, _ := os.ReadFile(tpath); string(got) != string(want) {
+						t.Fatalf("link target was modified")
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestArtifactsNormalWritesStillWork(t *testing.T) {
 	dir := recordRepo(t)
-	jsonl := filepath.Join(dir, "interlab.jsonl")
-	WriteConfigHeader(jsonl, Config{Name: "n", MetricName: "lift", Direction: "higher_is_better",
-		BenchmarkCommand: "echo METRIC lift=1", WorkingDirectory: dir, FilesInScope: []string{"code.go"}, RecordOnly: true})
-	before := treeSnapshot(t, dir, "code.go")
-	if err := os.Symlink(filepath.Join(dir, "code.go"), filepath.Join(dir, runLogFile)); err != nil {
+	if err := writeRunDetails(dir, RunDetails{Metrics: map[string]float64{"m": 2}}); err != nil {
 		t.Fatal(err)
+	}
+	if d, err := readRunDetails(dir); err != nil || d.Metrics["m"] != 2 {
+		t.Fatalf("details: %v %v", d, err)
+	}
+	if err := writeRunDetails(dir, RunDetails{Metrics: map[string]float64{"m": 3}}); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := readRunDetails(dir); d.Metrics["m"] != 3 {
+		t.Fatal("overwrite did not replace details")
+	}
+	jsonl := filepath.Join(dir, "interlab.jsonl")
+	WriteConfigHeader(jsonl, Config{Name: "n", MetricName: "m", Direction: "lower_is_better", BenchmarkCommand: "echo METRIC m=1"})
+	if err := WriteResult(jsonl, Result{Decision: "crash"}); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := ReconstructState(jsonl); s.RunCount != 1 {
+		t.Fatalf("state: %+v", s)
+	}
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp-") {
+			t.Errorf("leftover temp file %s", e.Name())
+		}
 	}
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{"working_directory": dir}
-	if _, err := handleRunExperiment(context.Background(), req); err == nil {
-		t.Fatal("run through a symlinked run log should fail")
+	if _, err := handleRunExperiment(context.Background(), req); err != nil {
+		t.Fatal(err)
 	}
-	if after := treeSnapshot(t, dir, "code.go"); after != before {
-		t.Fatalf("symlink target modified\nbefore:\n%s\nafter:\n%s", before, after)
+	if b, _ := os.ReadFile(filepath.Join(dir, runLogFile)); !strings.Contains(string(b), "METRIC m=1") {
+		t.Fatalf("run log content: %q", b)
 	}
 }
 
