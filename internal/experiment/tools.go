@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -182,7 +183,7 @@ func handleRunExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 	// for visibility, while also capturing everything in memory for
 	// metric parsing after completion.
 	logPath := filepath.Join(cwd, runLogFile)
-	logFile, logErr := os.Create(logPath)
+	logFile, logErr := createRunLog(logPath)
 	if logErr != nil {
 		return nil, fmt.Errorf("create run log: %w", logErr)
 	}
@@ -290,7 +291,10 @@ func parseMetrics(output string) map[string]float64 {
 		}
 		val, err := strconv.ParseFloat(m[2], 64)
 		if err != nil || math.IsNaN(val) || math.IsInf(val, 0) {
-			// Non-finite values cannot be stored as JSON; skip the line.
+			// Non-finite values cannot be stored as JSON. A later bad value
+			// invalidates the metric entirely rather than leaving an earlier one.
+			delete(metrics, m[1])
+			fmt.Fprintf(os.Stderr, "interlab: metric %q has a non-finite or unparseable value %q; ignoring it\n", m[1], m[2])
 			continue
 		}
 		metrics[m[1]] = val
@@ -309,6 +313,16 @@ func truncateTail(s string, n int) string {
 
 const runDetailsFile = ".interlab-run.json"
 const runLogFile = "interlab.run.log"
+
+// createRunLog creates the run log without following a symlink at the final
+// path component and refuses anything that is not a regular file, so a planted
+// link can never redirect the truncating write onto a scoped file or .git.
+func createRunLog(path string) (*os.File, error) {
+	if fi, err := os.Lstat(path); err == nil && !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s exists and is not a regular file (mode %s); refusing to write through it", path, fi.Mode().Type())
+	}
+	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0644)
+}
 
 func writeRunDetails(dir string, d RunDetails) error {
 	data, err := json.Marshal(d)
@@ -410,12 +424,15 @@ func handleLogExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 	// Same-run baseline arm, when the campaign names one.
 	if cfg.BaselineMetric != "" && hasPrimary {
 		if base, ok := details.Metrics[cfg.BaselineMetric]; ok {
-			delta := primaryValue - base
-			result.BaselineValue = &base
-			result.DeltaVsBaseline = &delta
-			delete(result.SecondaryMetrics, cfg.BaselineMetric)
-			if len(result.SecondaryMetrics) == 0 {
-				result.SecondaryMetrics = nil
+			// An overflowing delta cannot be stored as JSON: omit the paired
+			// fields rather than fail after side effects.
+			if delta := primaryValue - base; !math.IsInf(delta, 0) && !math.IsNaN(delta) {
+				result.BaselineValue = &base
+				result.DeltaVsBaseline = &delta
+				delete(result.SecondaryMetrics, cfg.BaselineMetric)
+				if len(result.SecondaryMetrics) == 0 {
+					result.SecondaryMetrics = nil
+				}
 			}
 		}
 	}

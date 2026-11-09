@@ -231,3 +231,61 @@ func TestPairedNonFinitePrimaryRecordsNoDelta(t *testing.T) {
 		t.Fatalf("fabricated delta recorded:\n%s", data)
 	}
 }
+
+func TestRunLogSymlinkRefused(t *testing.T) {
+	dir := recordRepo(t)
+	jsonl := filepath.Join(dir, "interlab.jsonl")
+	WriteConfigHeader(jsonl, Config{Name: "n", MetricName: "lift", Direction: "higher_is_better",
+		BenchmarkCommand: "echo METRIC lift=1", WorkingDirectory: dir, FilesInScope: []string{"code.go"}, RecordOnly: true})
+	before := treeSnapshot(t, dir, "code.go")
+	if err := os.Symlink(filepath.Join(dir, "code.go"), filepath.Join(dir, runLogFile)); err != nil {
+		t.Fatal(err)
+	}
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{"working_directory": dir}
+	if _, err := handleRunExperiment(context.Background(), req); err == nil {
+		t.Fatal("run through a symlinked run log should fail")
+	}
+	if after := treeSnapshot(t, dir, "code.go"); after != before {
+		t.Fatalf("symlink target modified\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
+
+func TestLaterNonFiniteInvalidatesEarlierValue(t *testing.T) {
+	if m := parseMetrics("METRIC m=1\nMETRIC m=NaN\nMETRIC b=2"); len(m) != 1 || m["b"] != 2 {
+		t.Fatalf("metrics = %v", m)
+	}
+	for _, mode := range []struct {
+		record   bool
+		decision string
+	}{{false, "keep"}, {true, "record"}} {
+		dir := recordRepo(t)
+		jsonl := filepath.Join(dir, "interlab.jsonl")
+		WriteConfigHeader(jsonl, Config{Name: "n", MetricName: "m", Direction: "higher_is_better",
+			BenchmarkCommand: "x", WorkingDirectory: dir, RecordOnly: mode.record, BaselineMetric: "base"})
+		writeRunDetails(dir, RunDetails{Metrics: parseMetrics("METRIC m=1\nMETRIC m=NaN\nMETRIC base=0.5")})
+		out := callTool(t, handleLogExperiment, map[string]interface{}{"working_directory": dir, "decision": mode.decision, "description": "x"})
+		if !strings.Contains(out, "missing or non-finite") {
+			t.Fatalf("%s accepted: %s", mode.decision, out)
+		}
+		if data, _ := os.ReadFile(jsonl); strings.Contains(string(data), "delta_vs_baseline") || strings.Contains(string(data), `"type":"result"`) {
+			t.Fatalf("result written:\n%s", data)
+		}
+	}
+}
+
+func TestOverflowingDeltaOmitted(t *testing.T) {
+	dir := recordRepo(t)
+	jsonl := filepath.Join(dir, "interlab.jsonl")
+	WriteConfigHeader(jsonl, Config{Name: "n", MetricName: "lift", Direction: "higher_is_better",
+		BenchmarkCommand: "x", WorkingDirectory: dir, RecordOnly: true, BaselineMetric: "base"})
+	writeRunDetails(dir, RunDetails{Metrics: map[string]float64{"lift": 1e308, "base": -1e308}})
+	out := callTool(t, handleLogExperiment, map[string]interface{}{"working_directory": dir, "decision": "record", "description": "x"})
+	if !strings.Contains(out, "Decision: record") {
+		t.Fatalf("expected recorded result: %s", out)
+	}
+	data, _ := os.ReadFile(jsonl)
+	if strings.Contains(string(data), "delta_vs_baseline") || !strings.Contains(string(data), `"decision":"record"`) {
+		t.Fatalf("unexpected jsonl:\n%s", data)
+	}
+}
