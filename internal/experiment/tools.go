@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,6 +34,8 @@ var initExperimentTool = mcp.NewTool("init_experiment",
 	mcp.WithString("direction", mcp.Required(), mcp.Description("'lower_is_better' or 'higher_is_better'")),
 	mcp.WithString("benchmark_command", mcp.Required(), mcp.Description("Shell command to run the benchmark")),
 	mcp.WithString("working_directory", mcp.Description("Working directory for the benchmark (default: cwd)")),
+	mcp.WithBoolean("record_only", mcp.Description("Advisory mode: log results only; never commit, revert or touch scoped files, and do not create a branch")),
+	mcp.WithString("baseline_metric", mcp.Description("Name of a METRIC line carrying the same run's baseline arm; deltas are taken against it instead of the campaign best")),
 )
 
 var runExperimentTool = mcp.NewTool("run_experiment",
@@ -41,8 +44,8 @@ var runExperimentTool = mcp.NewTool("run_experiment",
 )
 
 var logExperimentTool = mcp.NewTool("log_experiment",
-	mcp.WithDescription("Record experiment result. 'keep' commits changes, 'discard'/'crash' reverts."),
-	mcp.WithString("decision", mcp.Required(), mcp.Description("'keep', 'discard', or 'crash'")),
+	mcp.WithDescription("Record experiment result. 'keep' commits changes, 'discard'/'crash' reverts. In a record-only campaign use 'record' (or 'crash'): the result is logged and the working tree is never touched."),
+	mcp.WithString("decision", mcp.Required(), mcp.Description("'keep', 'discard', or 'crash'; 'record' in record-only campaigns")),
 	mcp.WithString("description", mcp.Required(), mcp.Description("What was changed and why")),
 	mcp.WithString("working_directory", mcp.Description("Directory containing interlab.jsonl (default: cwd)")),
 )
@@ -55,6 +58,8 @@ func handleInitExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	direction := req.GetString("direction", "")
 	benchCmd := req.GetString("benchmark_command", "")
 	workDir := req.GetString("working_directory", "")
+	recordOnly := req.GetBool("record_only", false)
+	baselineMetric := req.GetString("baseline_metric", "")
 
 	// Validate required fields
 	var missing []string
@@ -96,6 +101,8 @@ func handleInitExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 		Direction:        direction,
 		BenchmarkCommand: benchCmd,
 		WorkingDirectory: workDir,
+		RecordOnly:       recordOnly,
+		BaselineMetric:   baselineMetric,
 	}
 
 	jsonlPath := filepath.Join(workDir, "interlab.jsonl")
@@ -104,9 +111,11 @@ func handleInitExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	}
 
 	// Best-effort: create experiment branch
-	gitCmd := exec.CommandContext(ctx, "git", "-C", workDir, "checkout", "-b", "interlab/"+name)
 	branchMsg := ""
-	if err := gitCmd.Run(); err != nil {
+	if recordOnly {
+		// Advisory campaigns stay on the current branch and touch no git state.
+		branchMsg = " (record-only: no branch, no commits, no reverts)"
+	} else if err := exec.CommandContext(ctx, "git", "-C", workDir, "checkout", "-b", "interlab/"+name).Run(); err != nil {
 		branchMsg = fmt.Sprintf(" (branch creation skipped: %v)", err)
 	} else {
 		branchMsg = fmt.Sprintf(" on branch interlab/%s", name)
@@ -173,7 +182,7 @@ func handleRunExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 	// for visibility, while also capturing everything in memory for
 	// metric parsing after completion.
 	logPath := filepath.Join(cwd, runLogFile)
-	logFile, logErr := os.Create(logPath)
+	logFile, logErr := createRunLog(logPath)
 	if logErr != nil {
 		return nil, fmt.Errorf("create run log: %w", logErr)
 	}
@@ -216,13 +225,10 @@ func handleRunExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 	primaryName := state.Config.MetricName
 	if val, ok := metrics[primaryName]; ok {
 		fmt.Fprintf(&b, "- %s: %.4g %s\n", primaryName, val, state.Config.MetricUnit)
-		if state.HasBaseline {
-			delta := val - state.BestMetric
-			sign := "+"
-			if delta < 0 {
-				sign = ""
-			}
-			fmt.Fprintf(&b, "- delta vs best: %s%.4g %s\n", sign, delta, state.Config.MetricUnit)
+		if base, ok := metrics[state.Config.BaselineMetric]; state.Config.BaselineMetric != "" && ok {
+			fmt.Fprintf(&b, "- delta vs same-run baseline (%s=%.4g): %s\n", state.Config.BaselineMetric, base, signed(val-base, state.Config.MetricUnit))
+		} else if state.HasBaseline && !state.Config.RecordOnly && state.Config.BaselineMetric == "" {
+			fmt.Fprintf(&b, "- delta vs best: %s\n", signed(val-state.BestMetric, state.Config.MetricUnit))
 		}
 	}
 
@@ -255,6 +261,14 @@ func handleRunExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 	return mcp.NewToolResultText(b.String()), nil
 }
 
+func signed(delta float64, unit string) string {
+	sign := "+"
+	if delta < 0 {
+		sign = ""
+	}
+	return fmt.Sprintf("%s%.4g %s", sign, delta, unit)
+}
+
 // RunDetails holds data from a benchmark run for log_experiment to consume.
 type RunDetails struct {
 	ExitCode   int                `json:"exit_code"`
@@ -275,7 +289,11 @@ func parseMetrics(output string) map[string]float64 {
 			continue
 		}
 		val, err := strconv.ParseFloat(m[2], 64)
-		if err != nil {
+		if err != nil || math.IsNaN(val) || math.IsInf(val, 0) {
+			// Non-finite values cannot be stored as JSON. A later bad value
+			// invalidates the metric entirely rather than leaving an earlier one.
+			delete(metrics, m[1])
+			fmt.Fprintf(os.Stderr, "interlab: metric %q has a non-finite or unparseable value %q; ignoring it\n", m[1], m[2])
 			continue
 		}
 		metrics[m[1]] = val
@@ -295,12 +313,18 @@ func truncateTail(s string, n int) string {
 const runDetailsFile = ".interlab-run.json"
 const runLogFile = "interlab.run.log"
 
+// createRunLog installs a fresh run log by temp-file rename, so a symlink or
+// hard link planted at the path is replaced rather than written through.
+func createRunLog(path string) (*os.File, error) {
+	return createFileReplacing(path)
+}
+
 func writeRunDetails(dir string, d RunDetails) error {
 	data, err := json.Marshal(d)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, runDetailsFile), data, 0644)
+	return writeFileReplacing(filepath.Join(dir, runDetailsFile), data)
 }
 
 func readRunDetails(dir string) (*RunDetails, error) {
@@ -349,7 +373,11 @@ func handleLogExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 	description := req.GetString("description", "")
 
 	// Validate decision
-	if decision != "keep" && decision != "discard" && decision != "crash" {
+	if state.Config.RecordOnly {
+		if decision != "record" && decision != "crash" {
+			return mcp.NewToolResultText(fmt.Sprintf("invalid decision %q: record-only campaigns accept only 'record' or 'crash'", decision)), nil
+		}
+	} else if decision != "keep" && decision != "discard" && decision != "crash" {
 		return mcp.NewToolResultText(fmt.Sprintf("invalid decision %q: must be 'keep', 'discard', or 'crash'", decision)), nil
 	}
 
@@ -360,7 +388,12 @@ func handleLogExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 	}
 
 	// Get primary metric value
-	primaryValue := details.Metrics[cfg.MetricName]
+	primaryValue, hasPrimary := details.Metrics[cfg.MetricName]
+	if !hasPrimary && (decision == "keep" || decision == "record") {
+		// A missing or non-finite (NaN/Inf) primary must never be stored as a
+		// zero success or a baseline. Log it as 'crash' (or 'discard') instead.
+		return mcp.NewToolResultText(fmt.Sprintf("primary metric %q is missing or non-finite in the last run: cannot record %q; log it as 'crash'", cfg.MetricName, decision)), nil
+	}
 
 	// Build secondary metrics (everything except primary)
 	var secondary map[string]float64
@@ -383,9 +416,33 @@ func handleLogExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 		SecondaryMetrics: secondary,
 	}
 
+	// Same-run baseline arm, when the campaign names one.
+	if cfg.BaselineMetric != "" && hasPrimary {
+		if base, ok := details.Metrics[cfg.BaselineMetric]; ok {
+			// An overflowing delta cannot be stored as JSON: omit the paired
+			// fields rather than fail after side effects.
+			if delta := primaryValue - base; !math.IsInf(delta, 0) && !math.IsNaN(delta) {
+				result.BaselineValue = &base
+				result.DeltaVsBaseline = &delta
+				delete(result.SecondaryMetrics, cfg.BaselineMetric)
+				if len(result.SecondaryMetrics) == 0 {
+					result.SecondaryMetrics = nil
+				}
+			}
+		}
+	}
+
 	var b strings.Builder
 
 	switch decision {
+	case "record":
+		fmt.Fprintf(&b, "## Decision: record — %s\n", description)
+		fmt.Fprintf(&b, "- %s: %.4g %s\n", cfg.MetricName, primaryValue, cfg.MetricUnit)
+		if result.DeltaVsBaseline != nil {
+			fmt.Fprintf(&b, "- delta vs same-run baseline: %s\n", signed(*result.DeltaVsBaseline, cfg.MetricUnit))
+		}
+		fmt.Fprintf(&b, "- record-only: working tree untouched\n")
+
 	case "keep":
 		// Stage and commit files in scope
 		if len(cfg.FilesInScope) > 0 {
@@ -420,8 +477,8 @@ func handleLogExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 		}
 
 	case "discard", "crash":
-		// Revert files in scope
-		if len(cfg.FilesInScope) > 0 {
+		// Revert files in scope (never in record-only campaigns)
+		if len(cfg.FilesInScope) > 0 && !cfg.RecordOnly {
 			for _, f := range cfg.FilesInScope {
 				checkoutCmd := exec.CommandContext(ctx, "git", "-C", workDir, "checkout", "--", f)
 				checkoutCmd.Run() // best-effort
@@ -430,7 +487,11 @@ func handleLogExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 
 		fmt.Fprintf(&b, "## Decision: %s — %s\n", decision, description)
 		fmt.Fprintf(&b, "- %s: %.4g %s\n", cfg.MetricName, primaryValue, cfg.MetricUnit)
-		fmt.Fprintf(&b, "- changes reverted\n")
+		if cfg.RecordOnly {
+			fmt.Fprintf(&b, "- record-only: working tree untouched\n")
+		} else {
+			fmt.Fprintf(&b, "- changes reverted\n")
+		}
 	}
 
 	// Write result to JSONL
@@ -450,6 +511,9 @@ func handleLogExperiment(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 	fmt.Fprintf(&b, "\n### Campaign: %s (segment %d)\n", cfg.Name, updated.SegmentID)
 	fmt.Fprintf(&b, "- runs: %d | kept: %d | discarded: %d | crashes: %d\n",
 		updated.RunCount, updated.KeptCount, updated.DiscardedCount, updated.CrashCount)
+	if cfg.RecordOnly {
+		fmt.Fprintf(&b, "- recorded: %d (advisory; no best-so-far tracked)\n", updated.RecordedCount)
+	}
 	if updated.HasBaseline {
 		fmt.Fprintf(&b, "- best %s: %.4g %s\n", cfg.MetricName, updated.BestMetric, cfg.MetricUnit)
 	}

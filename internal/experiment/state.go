@@ -11,11 +11,11 @@ import (
 
 // Config is written as the first line of each segment in the JSONL.
 type Config struct {
-	Type             string   `json:"type"`                         // always "config"
+	Type             string   `json:"type"` // always "config"
 	Name             string   `json:"name"`
 	MetricName       string   `json:"metric_name"`
 	MetricUnit       string   `json:"metric_unit"`
-	Direction        string   `json:"direction"`                    // lower_is_better | higher_is_better
+	Direction        string   `json:"direction"` // lower_is_better | higher_is_better
 	BenchmarkCommand string   `json:"benchmark_command"`
 	WorkingDirectory string   `json:"working_directory,omitempty"`
 	FilesInScope     []string `json:"files_in_scope,omitempty"`
@@ -24,20 +24,29 @@ type Config struct {
 	MaxNoImprovement int      `json:"max_no_improvement,omitempty"` // default 10
 	RunID            string   `json:"run_id,omitempty"`
 	BeadID           string   `json:"bead_id,omitempty"`
-	Timestamp        string   `json:"timestamp"`
+	// RecordOnly makes the campaign advisory: results are logged but nothing is
+	// ever committed, reverted or otherwise written to the scoped files.
+	RecordOnly bool `json:"record_only,omitempty"`
+	// BaselineMetric names a METRIC line whose value in the same run is the
+	// baseline arm. When set, deltas are taken against it, not the campaign best.
+	BaselineMetric string `json:"baseline_metric,omitempty"`
+	Timestamp      string `json:"timestamp"`
 }
 
 // Result is written after each experiment.
 type Result struct {
-	Type             string             `json:"type"`                        // always "result"
-	Decision         string             `json:"decision"`                    // keep | discard | crash
+	Type             string             `json:"type"`     // always "result"
+	Decision         string             `json:"decision"` // keep | discard | crash | record (record-only campaigns)
 	Description      string             `json:"description"`
 	MetricValue      float64            `json:"metric_value,omitempty"`
 	DurationMs       int64              `json:"duration_ms"`
 	ExitCode         int                `json:"exit_code"`
 	SecondaryMetrics map[string]float64 `json:"secondary_metrics,omitempty"`
-	CommitHash       string             `json:"commit_hash,omitempty"`
-	Timestamp        string             `json:"timestamp"`
+	// BaselineValue and DeltaVsBaseline come from the same run's baseline arm.
+	BaselineValue   *float64 `json:"baseline_value,omitempty"`
+	DeltaVsBaseline *float64 `json:"delta_vs_baseline,omitempty"`
+	CommitHash      string   `json:"commit_hash,omitempty"`
+	Timestamp       string   `json:"timestamp"`
 }
 
 // State holds the reconstructed campaign state.
@@ -47,6 +56,7 @@ type State struct {
 	RunCount             int
 	KeptCount            int
 	DiscardedCount       int
+	RecordedCount        int
 	CrashCount           int
 	ConsecutiveCrashes   int
 	ConsecutiveNoImprove int
@@ -111,6 +121,7 @@ func ReconstructState(path string) (*State, error) {
 			s.RunCount = 0
 			s.KeptCount = 0
 			s.DiscardedCount = 0
+			s.RecordedCount = 0
 			s.CrashCount = 0
 			s.ConsecutiveCrashes = 0
 			s.ConsecutiveNoImprove = 0
@@ -128,6 +139,8 @@ func ReconstructState(path string) (*State, error) {
 				decision = "discard"
 			} else if bytes.Contains(line, []byte(`"decision":"crash"`)) {
 				decision = "crash"
+			} else if bytes.Contains(line, []byte(`"decision":"record"`)) {
+				decision = "record"
 			}
 
 			switch decision {
@@ -146,6 +159,11 @@ func ReconstructState(path string) (*State, error) {
 				} else {
 					s.ConsecutiveNoImprove++
 				}
+			case "record":
+				// Advisory result: counts as a run, never moves the best value
+				// or the no-improvement streak.
+				s.RecordedCount++
+				s.ConsecutiveCrashes = 0
 			case "discard":
 				s.DiscardedCount++
 				s.ConsecutiveCrashes = 0
@@ -232,7 +250,7 @@ func WriteResult(path string, res Result) error {
 }
 
 func appendJSONL(path string, v interface{}) error {
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := openAppendSafe(path)
 	if err != nil {
 		return err
 	}
