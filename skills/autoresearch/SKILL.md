@@ -181,6 +181,8 @@ Call `run_experiment`. Read the output carefully:
 
 Call `log_experiment` with the decision and a description of what you changed and why.
 
+**Record-only (advisory) campaigns.** If `init_experiment` was called with `record_only: true`, nothing is ever committed, reverted or branched. Log each result with `decision: "record"` (or `"crash"`); `keep` and `discard` are refused. Pass `baseline_metric` (the name of a METRIC line for the baseline arm, for example `baseline_pass_rate`) to compare each result with the baseline measured in the same run instead of the campaign's best so far. Skill-eval runners print `METRIC lift=...`, `METRIC lift_sigma=...` and `METRIC bytes=...`; all are stored, with `lift` as the primary metric and the rest as secondary metrics. Default campaigns are unchanged.
+
 ### 5b. Record Mutation
 
 After each `log_experiment` call, record the mutation for provenance tracking:
